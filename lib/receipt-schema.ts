@@ -27,6 +27,7 @@ export const storedReceiptSchema = receiptSchema.extend({
   sourceFileUrl: z.string(),
   sourceMimeType: z.string(),
   createdAt: z.string(),
+  reviewStatus: z.enum(["new", "reviewed", "posted", "archived"]).default("new"),
 })
 
 export type ReceiptData = z.infer<typeof receiptSchema>

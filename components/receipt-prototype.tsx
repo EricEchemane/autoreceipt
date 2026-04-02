@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 import {
   ArrowUpRight,
@@ -62,17 +63,17 @@ const MAX_PARALLEL_UPLOADS = resolveParallelUploads()
 const RECEIPT_REQUEST_TIMEOUT_MS = 90000
 
 const statusSteps = [
-  "Queued for analysis",
-  "Preparing and uploading",
-  "OpenAI extraction",
-  "Saved and review-ready",
+  "Waiting to start",
+  "Getting receipt ready",
+  "Reading receipt details",
+  "Saved and ready to review",
 ]
 
 const loadingHighlights = [
-  "Compressing large images before upload to keep the batch moving",
-  "Running multiple receipts concurrently with a small parallel queue",
-  "Streaming structured JSON while extraction is still in progress",
-  "Saving finished receipts immediately so completed rows appear fast",
+  "Preparing large files before upload so the batch keeps moving",
+  "Processing multiple receipts at once for faster turnaround",
+  "Showing updates as each receipt is being read",
+  "Saving finished receipts right away so you can review sooner",
 ]
 
 type UploadQueueItemStatus =
@@ -168,13 +169,13 @@ function getStatusLabel(status: UploadQueueItemStatus) {
     case "ready":
       return "Ready"
     case "queued":
-      return "Queued"
+      return "Waiting"
     case "preparing":
-      return "Preparing"
+      return "Getting ready"
     case "uploading":
-      return "Uploading"
+      return "Sending"
     case "extracting":
-      return "Extracting"
+      return "Reading"
     case "saving":
       return "Saving"
     case "done":
@@ -391,7 +392,7 @@ export function ReceiptPrototype() {
       return `Batch finished with ${batchStats.failed} receipt errors`
     }
 
-    return "Upload multiple receipts to start a faster batch extraction."
+    return "Upload one or more receipts to start processing."
   }, [batchStats, focusedUpload, isAnalyzing])
 
   function updateQueueItem(
@@ -659,9 +660,17 @@ export function ReceiptPrototype() {
         <section className="grid items-start gap-6 xl:grid-cols-[1.2fr_0.8fr]">
           <section className="min-w-0">
             <div className="flex flex-col gap-4">
-              <Badge variant="outline" className="w-fit">
-                Built for Real Bookkeeping Work
-              </Badge>
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline" className="w-fit">
+                  Built for Real Bookkeeping Work
+                </Badge>
+                <Button size="sm" variant="outline" asChild>
+                  <Link href="/receipts">Open receipts</Link>
+                </Button>
+                <Button size="sm" variant="outline" asChild>
+                  <Link href="/insights">Open summary</Link>
+                </Button>
+              </div>
               <div className="flex flex-col gap-3">
                 <CardTitle className="max-w-2xl text-4xl leading-tight sm:text-5xl">
                   Turn receipt photos into clean, review-ready expense records.
@@ -677,21 +686,21 @@ export function ReceiptPrototype() {
               <div className="grid gap-3 sm:grid-cols-3">
                 <MetricCard
                   icon={Files}
-                  label="Batch processing"
-                  value={`${MAX_PARALLEL_UPLOADS} receipts in parallel`}
-                  detail="Keeps extraction fast while maintaining stable throughput on real workloads."
+                  label="Batch speed"
+                  value={`${MAX_PARALLEL_UPLOADS} receipts at the same time`}
+                  detail="Keeps processing fast and steady for real bookkeeping work."
                 />
                 <MetricCard
                   icon={ShieldCheck}
-                  label="Review controls"
-                  value="Human-in-the-loop"
-                  detail="Validate merchant, tax, and line-item fields before final posting."
+                  label="Review checks"
+                  value="You stay in control"
+                  detail="Check merchant, tax, and line details before final posting."
                 />
                 <MetricCard
                   icon={ArrowUpRight}
-                  label="Audit trail"
-                  value="Source + parsed data"
-                  detail="Each record keeps both the original receipt and structured extraction."
+                  label="Record history"
+                  value="Original + organized details"
+                  detail="Each record keeps both the original receipt and organized data."
                 />
               </div>
 
@@ -739,7 +748,7 @@ export function ReceiptPrototype() {
                       Large images are auto-optimized before upload
                     </span>
                     <span className="rounded-full bg-background px-3 py-1">
-                      {MAX_PARALLEL_UPLOADS}-lane queue for consistent speed
+                      Up to {MAX_PARALLEL_UPLOADS} receipts processed at once
                     </span>
                   </div>
                 </div>
@@ -752,7 +761,7 @@ export function ReceiptPrototype() {
                     }}
                     disabled={queueItems.length === 0}
                   >
-                    Focus queue
+                    Focus list
                   </Button>
                   <Button
                     onClick={runAnalysis}
@@ -780,7 +789,7 @@ export function ReceiptPrototype() {
                       </div>
                       <div className="flex min-w-0 flex-1 flex-col">
                         <span className="text-sm font-medium">
-                          {isAnalyzing ? "Batch processing in progress" : "Batch ready"}
+                          {isAnalyzing ? "Working on your receipts" : "Batch ready"}
                         </span>
                         <span className="text-sm text-muted-foreground break-words">
                           {statusMessage}
@@ -802,18 +811,18 @@ export function ReceiptPrototype() {
                   <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
                     <SignalTile
                       icon={Zap}
-                      label="Throughput"
-                      value={`${batchStats.active}/${MAX_PARALLEL_UPLOADS} workers active`}
+                      label="In progress"
+                      value={`${batchStats.active}/${MAX_PARALLEL_UPLOADS} receipts active`}
                     />
                     <SignalTile
                       icon={ScanSearch}
-                      label="Now processing"
+                      label="Current update"
                       value={activeHighlight}
                     />
                     <SignalTile
                       icon={TimerReset}
-                      label="Queue status"
-                      value={`${batchStats.completed} done · ${batchStats.queued} queued`}
+                      label="Batch progress"
+                      value={`${batchStats.completed} done · ${batchStats.queued} waiting`}
                     />
                   </div>
                   <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
@@ -887,9 +896,9 @@ export function ReceiptPrototype() {
             <div className="flex flex-col gap-1.5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-col gap-1.5">
-                  <CardTitle className="text-2xl">Extraction details</CardTitle>
+                  <CardTitle className="text-2xl">Live receipt details</CardTitle>
                   <CardDescription>
-                    Inspect the selected receipt while fields are being extracted.
+                    Follow the selected receipt while we read and save it.
                   </CardDescription>
                 </div>
                 <Button
@@ -902,7 +911,7 @@ export function ReceiptPrototype() {
                   ) : (
                     <ChevronDown data-icon="inline-start" />
                   )}
-                  {showTechnicalDetails ? "Hide technical details" : "Show technical details"}
+                  {showTechnicalDetails ? "Hide detailed view" : "Show detailed view"}
                 </Button>
               </div>
             </div>
@@ -910,10 +919,10 @@ export function ReceiptPrototype() {
               <div className="flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex min-w-0 items-center gap-2">
                   <Sparkles className="size-4" />
-                  <span className="truncate">Live model output</span>
+                  <span className="truncate">Live updates</span>
                 </div>
                 <Badge variant="outline" className="max-w-full truncate sm:max-w-56">
-                  {focusedUpload ? focusedUpload.fileName : "No focused receipt"}
+                  {focusedUpload ? focusedUpload.fileName : "No selected receipt"}
                 </Badge>
               </div>
               {showTechnicalDetails ? (
@@ -931,7 +940,7 @@ export function ReceiptPrototype() {
                     ) : null}
                     <pre className="overflow-x-auto font-mono text-xs leading-6 text-foreground whitespace-pre-wrap break-words">
                       {focusedUpload?.streamedText ||
-                        '{\n  "message": "No active receipt stream yet."\n}'}
+                        '{\n  "message": "No live update yet."\n}'}
                     </pre>
                   </div>
                   {errorMessage ? (
@@ -945,7 +954,7 @@ export function ReceiptPrototype() {
                     </div>
                   ) : (
                     <div className="rounded-2xl border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-                      Select a receipt in the queue to view progress and parsed output.
+                      Select a receipt in the list to see progress and results.
                     </div>
                   )}
                 </>
@@ -959,8 +968,7 @@ export function ReceiptPrototype() {
                     />
                   ) : (
                     <p className="text-sm text-muted-foreground">
-                      Technical details are hidden. Turn them on anytime for live
-                      extraction output and debug information.
+                      Detailed view is hidden. You can open it anytime to see live updates.
                     </p>
                   )}
                 </div>
@@ -1011,7 +1019,7 @@ export function ReceiptPrototype() {
                 <MiniStat label="Line items" value={String(totals.itemCount)} />
                 <MiniStat label="Units" value={String(totals.quantityCount)} />
                 <MiniStat
-                  label="Extraction confidence"
+                  label="Readability score"
                   value={`${Math.round(receipt?.confidence ?? 0)}%`}
                 />
               </div>
@@ -1045,7 +1053,7 @@ export function ReceiptPrototype() {
                   </CardDescription>
                 </div>
                 <Badge variant="secondary">
-                  {receipt?.items.length ?? 0} rows extracted
+                  {receipt?.items.length ?? 0} line items found
                 </Badge>
               </div>
             </CardHeader>
@@ -1200,7 +1208,7 @@ function AnimatedReceiptLoader({
         <div className="receipt-float flex h-full flex-col gap-3 rounded-[1.2rem] border border-dashed bg-muted/35 p-4">
           <div className="flex items-center justify-between">
             <div className="text-xs tracking-[0.18em] text-muted-foreground uppercase">
-              Receipt OCR
+              Reading receipt
             </div>
             <LoaderCircle className="size-4 animate-spin text-primary" />
           </div>

@@ -79,6 +79,7 @@ export async function persistReceipt(params: {
     sourceFileUrl: `/uploads/receipts/${storedFileName}`,
     sourceMimeType: params.sourceMimeType,
     createdAt: new Date().toISOString(),
+    reviewStatus: "new",
     ...params.extractedReceipt,
   }
 
@@ -87,4 +88,41 @@ export async function persistReceipt(params: {
   await writeReceiptStore(receipts)
 
   return storedReceipt
+}
+
+export async function bulkUpdateReceipts(params: {
+  ids: string[]
+  reviewStatus?: StoredReceipt["reviewStatus"]
+  category?: string
+}) {
+  const idSet = new Set(params.ids)
+
+  if (idSet.size === 0) {
+    return []
+  }
+
+  const nextCategory = params.category?.trim()
+  const receipts = await readReceiptStore()
+  const updated: StoredReceipt[] = []
+
+  const nextReceipts = receipts.map((receipt) => {
+    if (!idSet.has(receipt.id)) {
+      return receipt
+    }
+
+    const nextReceipt: StoredReceipt = {
+      ...receipt,
+      reviewStatus: params.reviewStatus ?? receipt.reviewStatus,
+      items: nextCategory
+        ? receipt.items.map((item) => ({ ...item, category: nextCategory }))
+        : receipt.items,
+    }
+
+    updated.push(nextReceipt)
+    return nextReceipt
+  })
+
+  await writeReceiptStore(nextReceipts)
+
+  return updated
 }
