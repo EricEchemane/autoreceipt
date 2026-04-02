@@ -1,9 +1,11 @@
 "use client"
 
-import { useEffect, useMemo, useState, useTransition } from "react"
+import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 import {
   ArrowUpRight,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
   FileSearch,
   Files,
@@ -39,7 +41,24 @@ import {
 } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
 
-const MAX_PARALLEL_UPLOADS = 2
+const DEFAULT_PARALLEL_UPLOADS = 4
+const MAX_ALLOWED_PARALLEL_UPLOADS = 8
+const MIN_ALLOWED_PARALLEL_UPLOADS = 1
+
+function resolveParallelUploads() {
+  const raw = Number(process.env.NEXT_PUBLIC_MAX_PARALLEL_RECEIPTS)
+
+  if (!Number.isFinite(raw)) {
+    return DEFAULT_PARALLEL_UPLOADS
+  }
+
+  return Math.min(
+    MAX_ALLOWED_PARALLEL_UPLOADS,
+    Math.max(MIN_ALLOWED_PARALLEL_UPLOADS, Math.floor(raw))
+  )
+}
+
+const MAX_PARALLEL_UPLOADS = resolveParallelUploads()
 const RECEIPT_REQUEST_TIMEOUT_MS = 90000
 
 const statusSteps = [
@@ -243,7 +262,10 @@ export function ReceiptPrototype() {
   const [focusedUploadId, setFocusedUploadId] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState("")
   const [isLoadingReceipts, setIsLoadingReceipts] = useState(true)
+  const [highlightReview, setHighlightReview] = useState(false)
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false)
   const [, startTransition] = useTransition()
+  const reviewSectionRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     async function loadReceipts() {
@@ -265,6 +287,25 @@ export function ReceiptPrototype() {
 
     void loadReceipts()
   }, [])
+
+  useEffect(() => {
+    if (!highlightReview) {
+      return
+    }
+
+    reviewSectionRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    })
+
+    const timeoutId = window.setTimeout(() => {
+      setHighlightReview(false)
+    }, 1800)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [highlightReview])
 
   const focusedUpload = useMemo(() => {
     if (focusedUploadId) {
@@ -483,6 +524,7 @@ export function ReceiptPrototype() {
               ...current.filter((savedReceipt) => savedReceipt.id !== nextReceipt.id),
             ])
           })
+          setHighlightReview(true)
         }
 
         if (parsedEvent.event === "done") {
@@ -612,45 +654,44 @@ export function ReceiptPrototype() {
 
   return (
     <main className="relative min-h-svh overflow-hidden">
-      <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,color-mix(in_oklab,var(--primary)_14%,transparent),transparent_38%),radial-gradient(circle_at_top_right,color-mix(in_oklab,var(--chart-4)_20%,transparent),transparent_34%),linear-gradient(180deg,var(--background),color-mix(in_oklab,var(--background)_88%,var(--muted)))]" />
+      <div className="absolute inset-0 -z-10 bg-background" />
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
         <section className="grid items-start gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-          <Card className="min-w-0 border-border/70 bg-card/90 shadow-lg backdrop-blur">
-            <CardHeader className="gap-4">
+          <section className="min-w-0">
+            <div className="flex flex-col gap-4">
               <Badge variant="outline" className="w-fit">
-                Multi-Receipt Extraction
+                Built for Real Bookkeeping Work
               </Badge>
               <div className="flex flex-col gap-3">
                 <CardTitle className="max-w-2xl text-4xl leading-tight sm:text-5xl">
-                  Upload and process multiple receipts without slowing the whole
-                  batch down.
+                  Turn receipt photos into clean, review-ready expense records.
                 </CardTitle>
                 <CardDescription className="max-w-2xl text-base leading-7">
-                  The queue compresses large images locally, runs a small number of
-                  receipts in parallel, and saves each completed result immediately so
-                  you can review early wins before the batch finishes.
+                  Designed for business owners, bookkeepers, and finance staff who
+                  need faster month-end cleanup. Upload receipts in batch, extract key
+                  fields, and review categorized line items before posting to books.
                 </CardDescription>
               </div>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-6">
+            </div>
+            <div className="mt-6 flex flex-col gap-6">
               <div className="grid gap-3 sm:grid-cols-3">
                 <MetricCard
                   icon={Files}
-                  label="Batch mode"
-                  value={`${MAX_PARALLEL_UPLOADS} at a time`}
-                  detail="A limited parallel queue keeps throughput high without overwhelming the browser or API."
+                  label="Batch processing"
+                  value={`${MAX_PARALLEL_UPLOADS} receipts in parallel`}
+                  detail="Keeps extraction fast while maintaining stable throughput on real workloads."
                 />
                 <MetricCard
                   icon={ShieldCheck}
-                  label="Smart upload"
-                  value="Image optimization"
-                  detail="Large image receipts are resized before upload so the faster path stays the default."
+                  label="Review controls"
+                  value="Human-in-the-loop"
+                  detail="Validate merchant, tax, and line-item fields before final posting."
                 />
                 <MetricCard
                   icon={ArrowUpRight}
-                  label="Saved instantly"
-                  value="Per receipt"
-                  detail="Completed receipts appear in the table right away instead of waiting for the whole batch."
+                  label="Audit trail"
+                  value="Source + parsed data"
+                  detail="Each record keeps both the original receipt and structured extraction."
                 />
               </div>
 
@@ -658,17 +699,20 @@ export function ReceiptPrototype() {
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center gap-2 text-sm font-medium">
                     <Upload className="size-4" />
-                    Upload one or many receipt images or PDFs
+                    Upload receipt images or PDFs
                   </div>
-                  <label className="flex cursor-pointer flex-col gap-2 rounded-2xl border bg-background px-4 py-4 text-sm shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Badge variant="secondary">Primary action</Badge>
+                    Select files, then run analysis
+                  </div>
+                  <label className="flex cursor-pointer flex-col gap-2 rounded-2xl border border-primary/40 bg-background px-4 py-4 text-sm shadow-sm ring-1 ring-primary/20 transition-colors hover:bg-accent hover:text-accent-foreground hover:ring-primary/35">
                     <span className="font-medium text-foreground">
                       {batchStats.count > 0
                         ? `${batchStats.count} receipts selected`
                         : "No receipts chosen yet"}
                     </span>
                     <span className="text-muted-foreground">
-                      The batch is processed with a capped parallel queue so it stays
-                      fast and predictable.
+                      Great for weekly reimbursements and monthly bookkeeping runs.
                     </span>
                     <input
                       type="file"
@@ -692,10 +736,10 @@ export function ReceiptPrototype() {
                         : "PNG, JPG, WEBP, or PDF"}
                     </span>
                     <span className="rounded-full bg-background px-3 py-1">
-                      Large images are resized in the browser before upload
+                      Large images are auto-optimized before upload
                     </span>
                     <span className="rounded-full bg-background px-3 py-1">
-                      Up to {MAX_PARALLEL_UPLOADS} receipts are processed in parallel
+                      {MAX_PARALLEL_UPLOADS}-lane queue for consistent speed
                     </span>
                   </div>
                 </div>
@@ -708,9 +752,13 @@ export function ReceiptPrototype() {
                     }}
                     disabled={queueItems.length === 0}
                   >
-                    Focus batch
+                    Focus queue
                   </Button>
-                  <Button onClick={runAnalysis} disabled={isAnalyzing || queueItems.length === 0}>
+                  <Button
+                    onClick={runAnalysis}
+                    disabled={isAnalyzing || queueItems.length === 0}
+                    className="shadow-sm ring-1 ring-primary/30 hover:ring-primary/50"
+                  >
                     <ScanSearch data-icon="inline-start" />
                     {isAnalyzing
                       ? "Analyzing batch..."
@@ -732,7 +780,7 @@ export function ReceiptPrototype() {
                       </div>
                       <div className="flex min-w-0 flex-1 flex-col">
                         <span className="text-sm font-medium">
-                          {isAnalyzing ? "Batch extraction in progress" : "Batch ready"}
+                          {isAnalyzing ? "Batch processing in progress" : "Batch ready"}
                         </span>
                         <span className="text-sm text-muted-foreground break-words">
                           {statusMessage}
@@ -759,12 +807,12 @@ export function ReceiptPrototype() {
                     />
                     <SignalTile
                       icon={ScanSearch}
-                      label="Current focus"
+                      label="Now processing"
                       value={activeHighlight}
                     />
                     <SignalTile
                       icon={TimerReset}
-                      label="Batch state"
+                      label="Queue status"
                       value={`${batchStats.completed} done · ${batchStats.queued} queued`}
                     />
                   </div>
@@ -832,68 +880,107 @@ export function ReceiptPrototype() {
                   ))}
                 </div>
               ) : null}
-            </CardContent>
-          </Card>
+            </div>
+          </section>
 
-          <Card className="min-w-0 border-border bg-card shadow-lg">
-            <CardHeader>
-              <CardTitle className="text-2xl">Focused stream</CardTitle>
-              <CardDescription>
-                Watch the currently selected receipt as it moves through the batch.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex h-full flex-col gap-4">
+          <section className="min-w-0">
+            <div className="flex flex-col gap-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <CardTitle className="text-2xl">Extraction details</CardTitle>
+                  <CardDescription>
+                    Inspect the selected receipt while fields are being extracted.
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowTechnicalDetails((current) => !current)}
+                >
+                  {showTechnicalDetails ? (
+                    <ChevronUp data-icon="inline-start" />
+                  ) : (
+                    <ChevronDown data-icon="inline-start" />
+                  )}
+                  {showTechnicalDetails ? "Hide technical details" : "Show technical details"}
+                </Button>
+              </div>
+            </div>
+            <div className="mt-4 flex h-full flex-col gap-4">
               <div className="flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex min-w-0 items-center gap-2">
                   <Sparkles className="size-4" />
-                  <span className="truncate">Streaming from `/api/receipts/extract`</span>
+                  <span className="truncate">Live model output</span>
                 </div>
                 <Badge variant="outline" className="max-w-full truncate sm:max-w-56">
                   {focusedUpload ? focusedUpload.fileName : "No focused receipt"}
                 </Badge>
               </div>
-              {focusedUpload && isActiveStatus(focusedUpload.status) ? (
-                <AnimatedReceiptLoader
-                  progress={focusedUpload.progress}
-                  statusMessage={`${focusedUpload.fileName}: ${getStatusLabel(focusedUpload.status)}`}
-                  activeHighlight={activeHighlight}
-                />
-              ) : null}
-              <div className="relative min-h-80 min-w-0 overflow-hidden rounded-3xl border bg-muted/35 p-4">
-                {focusedUpload && isActiveStatus(focusedUpload.status) ? (
-                  <div className="receipt-scan-line absolute inset-x-4 top-0 h-20" />
-                ) : null}
-                <pre className="overflow-x-auto font-mono text-xs leading-6 text-foreground whitespace-pre-wrap break-words">
-                  {focusedUpload?.streamedText ||
-                    '{\n  "message": "No active receipt stream yet."\n}'}
-                </pre>
-              </div>
-              {errorMessage ? (
-                <div className="rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-                  {errorMessage}
-                </div>
-              ) : null}
-              {focusedUpload?.errorMessage ? (
-                <div className="rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-                  {focusedUpload.errorMessage}
-                </div>
+              {showTechnicalDetails ? (
+                <>
+                  {focusedUpload && isActiveStatus(focusedUpload.status) ? (
+                    <AnimatedReceiptLoader
+                      progress={focusedUpload.progress}
+                      statusMessage={`${focusedUpload.fileName}: ${getStatusLabel(focusedUpload.status)}`}
+                      activeHighlight={activeHighlight}
+                    />
+                  ) : null}
+                  <div className="relative min-h-80 min-w-0 overflow-hidden rounded-3xl border bg-muted/35 p-4">
+                    {focusedUpload && isActiveStatus(focusedUpload.status) ? (
+                      <div className="receipt-scan-line absolute inset-x-4 top-0 h-20" />
+                    ) : null}
+                    <pre className="overflow-x-auto font-mono text-xs leading-6 text-foreground whitespace-pre-wrap break-words">
+                      {focusedUpload?.streamedText ||
+                        '{\n  "message": "No active receipt stream yet."\n}'}
+                    </pre>
+                  </div>
+                  {errorMessage ? (
+                    <div className="rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+                      {errorMessage}
+                    </div>
+                  ) : null}
+                  {focusedUpload?.errorMessage ? (
+                    <div className="rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+                      {focusedUpload.errorMessage}
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+                      Select a receipt in the queue to view progress and parsed output.
+                    </div>
+                  )}
+                </>
               ) : (
-                <div className="rounded-2xl border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-                  Pick a receipt from the queue to inspect its live output and
-                  status updates.
+                <div className="rounded-2xl border bg-muted/35 p-4">
+                  {focusedUpload && isActiveStatus(focusedUpload.status) ? (
+                    <AnimatedReceiptLoader
+                      progress={focusedUpload.progress}
+                      statusMessage={`${focusedUpload.fileName}: ${getStatusLabel(focusedUpload.status)}`}
+                      activeHighlight={activeHighlight}
+                    />
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      Technical details are hidden. Turn them on anytime for live
+                      extraction output and debug information.
+                    </p>
+                  )}
                 </div>
               )}
-            </CardContent>
-          </Card>
+            </div>
+          </section>
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
-          <Card className="border-border">
+        <section
+          ref={reviewSectionRef}
+          className={cn(
+            "grid gap-6 xl:grid-cols-[0.75fr_1.25fr]",
+            highlightReview && "rounded-3xl ring-2 ring-primary/30 ring-offset-2 ring-offset-background"
+          )}
+        >
+          <Card className={cn("border-border transition-shadow", highlightReview && "shadow-lg shadow-primary/10")}>
             <CardHeader>
               <CardTitle>Receipt snapshot</CardTitle>
               <CardDescription>
-                Merchant-level fields extracted by OpenAI and validated before they
-                reach the UI.
+                Core fields teams usually check before booking an expense.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-6">
@@ -906,13 +993,13 @@ export function ReceiptPrototype() {
                   label="Purchase date"
                   value={receipt?.purchaseDate || "Not found"}
                 />
-                <InfoPair label="TIN number" value={receipt?.tinNumber || "Not found"} />
+                <InfoPair label="Tax ID / TIN" value={receipt?.tinNumber || "Not found"} />
                 <InfoPair
                   label="Receipt number"
                   value={receipt?.officialReceiptNumber || "Not found"}
                 />
                 <InfoPair
-                  label="Taxable sales"
+                  label="Taxable amount"
                   value={formatCurrency(receipt?.taxableSales ?? 0)}
                 />
                 <InfoPair
@@ -924,7 +1011,7 @@ export function ReceiptPrototype() {
                 <MiniStat label="Line items" value={String(totals.itemCount)} />
                 <MiniStat label="Units" value={String(totals.quantityCount)} />
                 <MiniStat
-                  label="Confidence"
+                  label="Extraction confidence"
                   value={`${Math.round(receipt?.confidence ?? 0)}%`}
                 />
               </div>
@@ -936,7 +1023,7 @@ export function ReceiptPrototype() {
                   <Button size="sm" asChild>
                     <a href={receipt.sourceFileUrl} target="_blank" rel="noreferrer">
                       <ImageUp data-icon="inline-start" />
-                      Open source file
+                      View original receipt
                     </a>
                   </Button>
                   <div className="rounded-full bg-muted px-3 py-2 text-xs text-muted-foreground">
@@ -947,14 +1034,14 @@ export function ReceiptPrototype() {
             </CardContent>
           </Card>
 
-          <Card className="border-border">
+          <Card className={cn("border-border transition-shadow", highlightReview && "shadow-lg shadow-primary/10")}>
             <CardHeader>
               <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
                 <div className="flex flex-col gap-1.5">
                   <CardTitle>Extracted line items</CardTitle>
                   <CardDescription>
-                    Description, quantity, price, category, and taxable sales for
-                    each receipt row.
+                    Review description, quantity, amount, category, and taxable value
+                    per line.
                   </CardDescription>
                 </div>
                 <Badge variant="secondary">
@@ -1015,8 +1102,7 @@ export function ReceiptPrototype() {
                 <div className="flex flex-col gap-1.5">
                   <CardTitle>Saved receipts</CardTitle>
                   <CardDescription>
-                    Persisted receipt history loaded from the local store and ready
-                    for review.
+                    Processed receipt history, ready for follow-up review.
                   </CardDescription>
                 </div>
                 <Badge variant="outline">
@@ -1061,7 +1147,7 @@ export function ReceiptPrototype() {
                               variant="outline"
                               onClick={() => setReceipt(savedReceipt)}
                             >
-                              View
+                              Open
                             </Button>
                             <Button size="sm" asChild>
                               <a
@@ -1083,8 +1169,8 @@ export function ReceiptPrototype() {
                         colSpan={6}
                         className="py-10 text-center text-muted-foreground"
                       >
-                        No receipts saved yet. Upload your first batch to build the
-                        records table.
+                        No receipts yet. Run your first batch to start building a
+                        searchable receipt history.
                       </TableCell>
                     </TableRow>
                   )}
@@ -1114,7 +1200,7 @@ function AnimatedReceiptLoader({
         <div className="receipt-float flex h-full flex-col gap-3 rounded-[1.2rem] border border-dashed bg-muted/35 p-4">
           <div className="flex items-center justify-between">
             <div className="text-xs tracking-[0.18em] text-muted-foreground uppercase">
-              Receipt scan
+              Receipt OCR
             </div>
             <LoaderCircle className="size-4 animate-spin text-primary" />
           </div>
@@ -1163,7 +1249,7 @@ function AnimatedReceiptLoader({
           ))}
         </div>
         <div className="text-xs tracking-[0.18em] text-muted-foreground uppercase">
-          Live progress {progress}%
+          Progress {progress}%
         </div>
       </div>
     </div>
