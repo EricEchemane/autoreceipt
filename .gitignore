@@ -17,6 +17,8 @@
 
 # production
 /build
+/.data
+/public/uploads/receipts
 
 # misc
 .DS_Store

@@ -1,0 +1,1234 @@
+"use client"
+
+import { useEffect, useMemo, useState, useTransition } from "react"
+import {
+  ArrowUpRight,
+  CheckCircle2,
+  ExternalLink,
+  FileSearch,
+  Files,
+  ImageUp,
+  LoaderCircle,
+  ScanSearch,
+  ShieldCheck,
+  Sparkles,
+  TimerReset,
+  Upload,
+  Zap,
+} from "lucide-react"
+
+import type { StoredReceipt } from "@/lib/receipt-schema"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Progress } from "@/components/ui/progress"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { cn } from "@/lib/utils"
+
+const MAX_PARALLEL_UPLOADS = 2
+const RECEIPT_REQUEST_TIMEOUT_MS = 90000
+
+const statusSteps = [
+  "Queued for analysis",
+  "Preparing and uploading",
+  "OpenAI extraction",
+  "Saved and review-ready",
+]
+
+const loadingHighlights = [
+  "Compressing large images before upload to keep the batch moving",
+  "Running multiple receipts concurrently with a small parallel queue",
+  "Streaming structured JSON while extraction is still in progress",
+  "Saving finished receipts immediately so completed rows appear fast",
+]
+
+type UploadQueueItemStatus =
+  | "ready"
+  | "queued"
+  | "preparing"
+  | "uploading"
+  | "extracting"
+  | "saving"
+  | "done"
+  | "error"
+
+type UploadQueueItem = {
+  id: string
+  file: File
+  fileName: string
+  fileSize: number
+  status: UploadQueueItemStatus
+  progress: number
+  streamedText: string
+  optimized: boolean
+  errorMessage: string
+  storedReceipt: StoredReceipt | null
+}
+
+type ParsedSseEvent = {
+  event: string
+  data: unknown
+}
+
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("en-PH", {
+    style: "currency",
+    currency: "PHP",
+  }).format(value)
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(0)} KB`
+  }
+
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+}
+
+function parseSseChunk(chunk: string) {
+  const eventLine = chunk
+    .split("\n")
+    .find((line) => line.startsWith("event: "))
+    ?.slice("event: ".length)
+
+  const dataLines = chunk
+    .split("\n")
+    .filter((line) => line.startsWith("data: "))
+    .map((line) => line.slice("data: ".length))
+
+  if (!eventLine || dataLines.length === 0) {
+    return null
+  }
+
+  return {
+    event: eventLine,
+    data: JSON.parse(dataLines.join("\n")),
+  }
+}
+
+function splitSsePayload(buffer: string) {
+  const events = buffer.split("\n\n")
+
+  return {
+    completeEvents: events.slice(0, -1),
+    remainder: events.at(-1) ?? "",
+  }
+}
+
+function createQueueItem(file: File): UploadQueueItem {
+  return {
+    id: crypto.randomUUID(),
+    file,
+    fileName: file.name,
+    fileSize: file.size,
+    status: "ready",
+    progress: 0,
+    streamedText: "",
+    optimized: false,
+    errorMessage: "",
+    storedReceipt: null,
+  }
+}
+
+function getStatusLabel(status: UploadQueueItemStatus) {
+  switch (status) {
+    case "ready":
+      return "Ready"
+    case "queued":
+      return "Queued"
+    case "preparing":
+      return "Preparing"
+    case "uploading":
+      return "Uploading"
+    case "extracting":
+      return "Extracting"
+    case "saving":
+      return "Saving"
+    case "done":
+      return "Done"
+    case "error":
+      return "Error"
+  }
+}
+
+function getStatusBadgeVariant(status: UploadQueueItemStatus) {
+  switch (status) {
+    case "ready":
+      return "outline" as const
+    case "done":
+      return "success" as const
+    case "error":
+      return "destructive" as const
+    default:
+      return "warning" as const
+  }
+}
+
+function isActiveStatus(status: UploadQueueItemStatus) {
+  return (
+    status === "preparing" ||
+    status === "uploading" ||
+    status === "extracting" ||
+    status === "saving"
+  )
+}
+
+async function optimizeImageForUpload(file: File) {
+  if (!file.type.startsWith("image/")) {
+    return { file, wasOptimized: false }
+  }
+
+  const bitmap = await createImageBitmap(file)
+  const maxDimension = 1600
+  const largestSide = Math.max(bitmap.width, bitmap.height)
+
+  if (largestSide <= maxDimension && file.size < 2 * 1024 * 1024) {
+    bitmap.close()
+    return { file, wasOptimized: false }
+  }
+
+  const scale = Math.min(1, maxDimension / largestSide)
+  const width = Math.max(1, Math.round(bitmap.width * scale))
+  const height = Math.max(1, Math.round(bitmap.height * scale))
+  const canvas = document.createElement("canvas")
+
+  canvas.width = width
+  canvas.height = height
+
+  const context = canvas.getContext("2d")
+
+  if (!context) {
+    bitmap.close()
+    return { file, wasOptimized: false }
+  }
+
+  context.drawImage(bitmap, 0, 0, width, height)
+  bitmap.close()
+
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, "image/jpeg", 0.82)
+  })
+
+  if (!blob) {
+    return { file, wasOptimized: false }
+  }
+
+  const optimizedFile = new File(
+    [blob],
+    file.name.replace(/\.[^.]+$/, "") + ".jpg",
+    { type: "image/jpeg" }
+  )
+
+  return { file: optimizedFile, wasOptimized: true }
+}
+
+export function ReceiptPrototype() {
+  const [receipt, setReceipt] = useState<StoredReceipt | null>(null)
+  const [receipts, setReceipts] = useState<StoredReceipt[]>([])
+  const [queueItems, setQueueItems] = useState<UploadQueueItem[]>([])
+  const [focusedUploadId, setFocusedUploadId] = useState<string | null>(null)
+  const [errorMessage, setErrorMessage] = useState("")
+  const [isLoadingReceipts, setIsLoadingReceipts] = useState(true)
+  const [, startTransition] = useTransition()
+
+  useEffect(() => {
+    async function loadReceipts() {
+      try {
+        const response = await fetch("/api/receipts")
+        const payload = (await response.json()) as { receipts?: StoredReceipt[] }
+        const nextReceipts = payload.receipts ?? []
+
+        setReceipts(nextReceipts)
+        setReceipt(nextReceipts[0] ?? null)
+      } catch (error) {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Could not load saved receipts."
+        )
+      } finally {
+        setIsLoadingReceipts(false)
+      }
+    }
+
+    void loadReceipts()
+  }, [])
+
+  const focusedUpload = useMemo(() => {
+    if (focusedUploadId) {
+      const match = queueItems.find((item) => item.id === focusedUploadId)
+      if (match) {
+        return match
+      }
+    }
+
+    return (
+      queueItems.find((item) => isActiveStatus(item.status)) ??
+      queueItems[0] ??
+      null
+    )
+  }, [focusedUploadId, queueItems])
+
+  const totals = useMemo(
+    () => ({
+      itemCount: receipt?.items.length ?? 0,
+      quantityCount:
+        receipt?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0,
+    }),
+    [receipt]
+  )
+
+  const batchStats = useMemo(() => {
+    const completed = queueItems.filter((item) => item.status === "done").length
+    const failed = queueItems.filter((item) => item.status === "error").length
+    const active = queueItems.filter((item) => isActiveStatus(item.status)).length
+    const queued = queueItems.filter((item) => item.status === "queued").length
+    const totalBytes = queueItems.reduce((sum, item) => sum + item.fileSize, 0)
+
+    return {
+      completed,
+      failed,
+      active,
+      queued,
+      totalBytes,
+      count: queueItems.length,
+    }
+  }, [queueItems])
+
+  const isAnalyzing = useMemo(
+    () =>
+      queueItems.some(
+        (item) => item.status === "queued" || isActiveStatus(item.status)
+      ),
+    [queueItems]
+  )
+
+  const analysisProgress = useMemo(() => {
+    if (queueItems.length === 0) {
+      return 0
+    }
+
+    const total = queueItems.reduce((sum, item) => sum + item.progress, 0)
+    return Math.round(total / queueItems.length)
+  }, [queueItems])
+
+  const activeStep = Math.min(
+    Math.floor(analysisProgress / 34),
+    statusSteps.length - 1
+  )
+  const activeHighlight =
+    loadingHighlights[
+      Math.min(Math.floor(analysisProgress / 25), loadingHighlights.length - 1)
+    ]
+
+  const statusMessage = useMemo(() => {
+    if (focusedUpload && isActiveStatus(focusedUpload.status)) {
+      return `${focusedUpload.fileName}: ${getStatusLabel(focusedUpload.status)}`
+    }
+
+    if (isAnalyzing) {
+      return `Processing ${batchStats.completed + batchStats.active} of ${batchStats.count} receipts`
+    }
+
+    if (batchStats.count > 0 && batchStats.completed > 0 && batchStats.failed === 0) {
+      return `Finished ${batchStats.completed} receipts in the latest batch`
+    }
+
+    if (batchStats.failed > 0) {
+      return `Batch finished with ${batchStats.failed} receipt errors`
+    }
+
+    return "Upload multiple receipts to start a faster batch extraction."
+  }, [batchStats, focusedUpload, isAnalyzing])
+
+  function updateQueueItem(
+    id: string,
+    updater: (item: UploadQueueItem) => UploadQueueItem
+  ) {
+    setQueueItems((current) =>
+      current.map((item) => (item.id === id ? updater(item) : item))
+    )
+  }
+
+  async function processQueueItem(job: UploadQueueItem) {
+    setFocusedUploadId(job.id)
+    updateQueueItem(job.id, (item) => ({
+      ...item,
+      status: "preparing",
+      progress: 8,
+      streamedText: "",
+      errorMessage: "",
+      optimized: false,
+    }))
+
+    try {
+      const { file: uploadFile, wasOptimized } = await optimizeImageForUpload(job.file)
+
+      updateQueueItem(job.id, (item) => ({
+        ...item,
+        optimized: wasOptimized,
+        status: "uploading",
+        progress: 18,
+      }))
+
+      const formData = new FormData()
+      formData.append("file", uploadFile)
+
+      const requestController = new AbortController()
+      const timeoutId = window.setTimeout(() => {
+        requestController.abort("Receipt extraction timed out.")
+      }, RECEIPT_REQUEST_TIMEOUT_MS)
+
+      const response = await fetch("/api/receipts/extract", {
+        method: "POST",
+        body: formData,
+        signal: requestController.signal,
+      })
+
+      window.clearTimeout(timeoutId)
+
+      if (!response.ok) {
+        let message = "Receipt extraction failed."
+
+        try {
+          const errorPayload = (await response.json()) as { error?: string }
+          if (errorPayload.error) {
+            message = errorPayload.error
+          }
+        } catch {}
+
+        throw new Error(message)
+      }
+
+      if (!response.body) {
+        throw new Error("Streaming response body is unavailable.")
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+      let sawReceiptEvent = false
+      let sawDoneEvent = false
+
+      const handleEvent = (parsedEvent: ParsedSseEvent) => {
+        if (parsedEvent.event === "status") {
+          const statusData = parsedEvent.data as {
+            stage?: string
+            progress: number
+          }
+
+          if (statusData.stage === "finalizing") {
+            updateQueueItem(job.id, (item) => ({
+              ...item,
+              status: "saving",
+              progress: statusData.progress,
+            }))
+          } else {
+            updateQueueItem(job.id, (item) => ({
+              ...item,
+              status: "uploading",
+              progress: Math.max(item.progress, statusData.progress),
+            }))
+          }
+        }
+
+        if (parsedEvent.event === "text_delta") {
+          const textDeltaData = parsedEvent.data as {
+            progress: number
+            snapshot: string
+          }
+
+          updateQueueItem(job.id, (item) => ({
+            ...item,
+            status: "extracting",
+            progress: Math.min(
+              Math.max(item.progress, textDeltaData.progress),
+              85
+            ),
+            streamedText: textDeltaData.snapshot,
+          }))
+        }
+
+        if (parsedEvent.event === "receipt") {
+          const receiptData = parsedEvent.data as {
+            receipt: StoredReceipt
+          }
+          const nextReceipt = receiptData.receipt
+
+          sawReceiptEvent = true
+
+          updateQueueItem(job.id, (item) => ({
+            ...item,
+            status: "done",
+            progress: 100,
+            storedReceipt: nextReceipt,
+          }))
+
+          startTransition(() => {
+            setReceipt(nextReceipt)
+            setReceipts((current) => [
+              nextReceipt,
+              ...current.filter((savedReceipt) => savedReceipt.id !== nextReceipt.id),
+            ])
+          })
+        }
+
+        if (parsedEvent.event === "done") {
+          sawDoneEvent = true
+        }
+
+        if (parsedEvent.event === "error") {
+          const errorData = parsedEvent.data as { message?: string }
+          throw new Error(errorData.message ?? "Receipt extraction failed.")
+        }
+      }
+
+      while (true) {
+        const { done, value } = await reader.read()
+
+        if (done) {
+          buffer += decoder.decode()
+
+          const finalChunk = buffer.trim()
+          if (finalChunk.length > 0) {
+            const parsedEvent = parseSseChunk(finalChunk)
+            if (parsedEvent) {
+              handleEvent(parsedEvent)
+            }
+          }
+
+          break
+        }
+
+        buffer += decoder.decode(value, { stream: true })
+        const { completeEvents, remainder } = splitSsePayload(buffer)
+        buffer = remainder
+
+        for (const rawEvent of completeEvents) {
+          const parsedEvent = parseSseChunk(rawEvent)
+
+          if (!parsedEvent) {
+            continue
+          }
+          handleEvent(parsedEvent)
+        }
+      }
+
+      if (!sawReceiptEvent) {
+        const completionHint = sawDoneEvent
+          ? "The stream ended with done but no receipt payload."
+          : "The stream ended before completion."
+        throw new Error(completionHint)
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.name === "AbortError"
+            ? "Receipt request timed out. Please retry this file."
+            : error.message
+          : "Receipt extraction failed."
+
+      updateQueueItem(job.id, (item) => ({
+        ...item,
+        status: "error",
+        progress: 100,
+        errorMessage: message,
+      }))
+    }
+  }
+
+  async function runAnalysis() {
+    if (queueItems.length === 0) {
+      setErrorMessage("Choose one or more receipt files first.")
+      return
+    }
+
+    setErrorMessage("")
+
+    const pendingJobs = queueItems
+      .filter((item) => item.status !== "done")
+      .map((item) => ({
+        ...item,
+        status: "queued" as const,
+        progress: 0,
+        streamedText: "",
+        errorMessage: "",
+        optimized: false,
+      }))
+
+    if (pendingJobs.length === 0) {
+      return
+    }
+
+    setQueueItems((current) =>
+      current.map((item) =>
+        item.status === "done"
+          ? item
+          : {
+              ...item,
+              status: "queued",
+              progress: 0,
+              streamedText: "",
+              errorMessage: "",
+              optimized: false,
+            }
+      )
+    )
+
+    setFocusedUploadId(pendingJobs[0]?.id ?? null)
+
+    let nextJobIndex = 0
+
+    await Promise.all(
+      Array.from(
+        { length: Math.min(MAX_PARALLEL_UPLOADS, pendingJobs.length) },
+        async () => {
+          while (nextJobIndex < pendingJobs.length) {
+            const job = pendingJobs[nextJobIndex]
+            nextJobIndex += 1
+
+            if (!job) {
+              break
+            }
+
+            await processQueueItem(job)
+          }
+        }
+      )
+    )
+  }
+
+  return (
+    <main className="relative min-h-svh overflow-hidden">
+      <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,color-mix(in_oklab,var(--primary)_14%,transparent),transparent_38%),radial-gradient(circle_at_top_right,color-mix(in_oklab,var(--chart-4)_20%,transparent),transparent_34%),linear-gradient(180deg,var(--background),color-mix(in_oklab,var(--background)_88%,var(--muted)))]" />
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
+        <section className="grid items-start gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+          <Card className="min-w-0 border-border/70 bg-card/90 shadow-lg backdrop-blur">
+            <CardHeader className="gap-4">
+              <Badge variant="outline" className="w-fit">
+                Multi-Receipt Extraction
+              </Badge>
+              <div className="flex flex-col gap-3">
+                <CardTitle className="max-w-2xl text-4xl leading-tight sm:text-5xl">
+                  Upload and process multiple receipts without slowing the whole
+                  batch down.
+                </CardTitle>
+                <CardDescription className="max-w-2xl text-base leading-7">
+                  The queue compresses large images locally, runs a small number of
+                  receipts in parallel, and saves each completed result immediately so
+                  you can review early wins before the batch finishes.
+                </CardDescription>
+              </div>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-6">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <MetricCard
+                  icon={Files}
+                  label="Batch mode"
+                  value={`${MAX_PARALLEL_UPLOADS} at a time`}
+                  detail="A limited parallel queue keeps throughput high without overwhelming the browser or API."
+                />
+                <MetricCard
+                  icon={ShieldCheck}
+                  label="Smart upload"
+                  value="Image optimization"
+                  detail="Large image receipts are resized before upload so the faster path stays the default."
+                />
+                <MetricCard
+                  icon={ArrowUpRight}
+                  label="Saved instantly"
+                  value="Per receipt"
+                  detail="Completed receipts appear in the table right away instead of waiting for the whole batch."
+                />
+              </div>
+
+              <div className="grid gap-4 rounded-3xl border border-dashed border-border bg-muted/40 p-4 sm:p-5 md:grid-cols-[1fr_auto] md:items-end">
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <Upload className="size-4" />
+                    Upload one or many receipt images or PDFs
+                  </div>
+                  <label className="flex cursor-pointer flex-col gap-2 rounded-2xl border bg-background px-4 py-4 text-sm shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground">
+                    <span className="font-medium text-foreground">
+                      {batchStats.count > 0
+                        ? `${batchStats.count} receipts selected`
+                        : "No receipts chosen yet"}
+                    </span>
+                    <span className="text-muted-foreground">
+                      The batch is processed with a capped parallel queue so it stays
+                      fast and predictable.
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*,.pdf"
+                      multiple
+                      className="sr-only"
+                      onChange={(event) => {
+                        const files = Array.from(event.target.files ?? [])
+                        const nextQueueItems = files.map(createQueueItem)
+
+                        setQueueItems(nextQueueItems)
+                        setFocusedUploadId(nextQueueItems[0]?.id ?? null)
+                        setErrorMessage("")
+                      }}
+                    />
+                  </label>
+                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    <span className="rounded-full bg-background px-3 py-1">
+                      {batchStats.count > 0
+                        ? `${batchStats.count} files · ${formatFileSize(batchStats.totalBytes)}`
+                        : "PNG, JPG, WEBP, or PDF"}
+                    </span>
+                    <span className="rounded-full bg-background px-3 py-1">
+                      Large images are resized in the browser before upload
+                    </span>
+                    <span className="rounded-full bg-background px-3 py-1">
+                      Up to {MAX_PARALLEL_UPLOADS} receipts are processed in parallel
+                    </span>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 sm:gap-3">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setFocusedUploadId(queueItems[0]?.id ?? null)
+                      setErrorMessage("")
+                    }}
+                    disabled={queueItems.length === 0}
+                  >
+                    Focus batch
+                  </Button>
+                  <Button onClick={runAnalysis} disabled={isAnalyzing || queueItems.length === 0}>
+                    <ScanSearch data-icon="inline-start" />
+                    {isAnalyzing
+                      ? "Analyzing batch..."
+                      : `Analyze ${batchStats.count || ""} receipt${batchStats.count === 1 ? "" : "s"}`.trim()}
+                  </Button>
+                </div>
+              </div>
+
+              <Card className="border-border bg-card shadow-none">
+                <CardContent className="flex flex-col gap-5 py-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="relative flex size-11 items-center justify-center rounded-2xl border bg-muted">
+                        {isAnalyzing ? (
+                          <LoaderCircle className="size-5 animate-spin" />
+                        ) : (
+                          <FileSearch className="size-5" />
+                        )}
+                      </div>
+                      <div className="flex min-w-0 flex-1 flex-col">
+                        <span className="text-sm font-medium">
+                          {isAnalyzing ? "Batch extraction in progress" : "Batch ready"}
+                        </span>
+                        <span className="text-sm text-muted-foreground break-words">
+                          {statusMessage}
+                        </span>
+                      </div>
+                    </div>
+                    <Badge
+                      variant={
+                        batchStats.failed > 0 && !isAnalyzing ? "destructive" : analysisProgress === 100 && batchStats.count > 0 ? "success" : "warning"
+                      }
+                      className="w-fit border-0 sm:self-start"
+                    >
+                      {batchStats.count === 0
+                        ? "No batch yet"
+                        : `${analysisProgress}% overall`}
+                    </Badge>
+                  </div>
+                  <Progress value={analysisProgress} />
+                  <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+                    <SignalTile
+                      icon={Zap}
+                      label="Throughput"
+                      value={`${batchStats.active}/${MAX_PARALLEL_UPLOADS} workers active`}
+                    />
+                    <SignalTile
+                      icon={ScanSearch}
+                      label="Current focus"
+                      value={activeHighlight}
+                    />
+                    <SignalTile
+                      icon={TimerReset}
+                      label="Batch state"
+                      value={`${batchStats.completed} done · ${batchStats.queued} queued`}
+                    />
+                  </div>
+                  <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
+                    {statusSteps.map((step, index) => (
+                      <div
+                        key={step}
+                        className={cn(
+                          "flex items-center gap-2 rounded-2xl border px-3 py-2 transition-all",
+                          index <= activeStep
+                            ? "border-primary/40 bg-primary/10 text-foreground"
+                            : "border-border bg-muted/30"
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "size-2.5 rounded-full",
+                            index <= activeStep ? "bg-primary" : "bg-muted-foreground/50"
+                          )}
+                        />
+                        <span>{step}</span>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {queueItems.length > 0 ? (
+                <div className="grid min-w-0 gap-2 rounded-3xl border bg-background p-2 sm:p-3">
+                  {queueItems.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={cn(
+                        "flex w-full flex-col items-start gap-3 rounded-2xl border px-3 py-3 text-left transition-colors sm:flex-row sm:items-center sm:gap-4 sm:px-4",
+                        focusedUpload?.id === item.id
+                          ? "border-primary/40 bg-accent text-accent-foreground"
+                          : "border-border hover:bg-accent hover:text-accent-foreground"
+                      )}
+                      onClick={() => setFocusedUploadId(item.id)}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                            {item.fileName}
+                          </span>
+                          {item.optimized ? (
+                            <Badge variant="outline">Optimized</Badge>
+                          ) : null}
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {formatFileSize(item.fileSize)}
+                        </div>
+                        <Progress value={item.progress} className="mt-3 h-1.5" />
+                      </div>
+                      <div className="flex w-full flex-row items-center justify-between gap-2 sm:w-auto sm:flex-col sm:items-end">
+                        <Badge variant={getStatusBadgeVariant(item.status)}>
+                          {getStatusLabel(item.status)}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {item.progress}%
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className="min-w-0 border-border bg-card shadow-lg">
+            <CardHeader>
+              <CardTitle className="text-2xl">Focused stream</CardTitle>
+              <CardDescription>
+                Watch the currently selected receipt as it moves through the batch.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex h-full flex-col gap-4">
+              <div className="flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Sparkles className="size-4" />
+                  <span className="truncate">Streaming from `/api/receipts/extract`</span>
+                </div>
+                <Badge variant="outline" className="max-w-full truncate sm:max-w-56">
+                  {focusedUpload ? focusedUpload.fileName : "No focused receipt"}
+                </Badge>
+              </div>
+              {focusedUpload && isActiveStatus(focusedUpload.status) ? (
+                <AnimatedReceiptLoader
+                  progress={focusedUpload.progress}
+                  statusMessage={`${focusedUpload.fileName}: ${getStatusLabel(focusedUpload.status)}`}
+                  activeHighlight={activeHighlight}
+                />
+              ) : null}
+              <div className="relative min-h-80 min-w-0 overflow-hidden rounded-3xl border bg-muted/35 p-4">
+                {focusedUpload && isActiveStatus(focusedUpload.status) ? (
+                  <div className="receipt-scan-line absolute inset-x-4 top-0 h-20" />
+                ) : null}
+                <pre className="overflow-x-auto font-mono text-xs leading-6 text-foreground whitespace-pre-wrap break-words">
+                  {focusedUpload?.streamedText ||
+                    '{\n  "message": "No active receipt stream yet."\n}'}
+                </pre>
+              </div>
+              {errorMessage ? (
+                <div className="rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+                  {errorMessage}
+                </div>
+              ) : null}
+              {focusedUpload?.errorMessage ? (
+                <div className="rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+                  {focusedUpload.errorMessage}
+                </div>
+              ) : (
+                <div className="rounded-2xl border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+                  Pick a receipt from the queue to inspect its live output and
+                  status updates.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
+        <section className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
+          <Card className="border-border">
+            <CardHeader>
+              <CardTitle>Receipt snapshot</CardTitle>
+              <CardDescription>
+                Merchant-level fields extracted by OpenAI and validated before they
+                reach the UI.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-6">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <InfoPair
+                  label="Merchant"
+                  value={receipt?.merchantName || "No saved receipt selected"}
+                />
+                <InfoPair
+                  label="Purchase date"
+                  value={receipt?.purchaseDate || "Not found"}
+                />
+                <InfoPair label="TIN number" value={receipt?.tinNumber || "Not found"} />
+                <InfoPair
+                  label="Receipt number"
+                  value={receipt?.officialReceiptNumber || "Not found"}
+                />
+                <InfoPair
+                  label="Taxable sales"
+                  value={formatCurrency(receipt?.taxableSales ?? 0)}
+                />
+                <InfoPair
+                  label="VAT amount"
+                  value={formatCurrency(receipt?.vatAmount ?? 0)}
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <MiniStat label="Line items" value={String(totals.itemCount)} />
+                <MiniStat label="Units" value={String(totals.quantityCount)} />
+                <MiniStat
+                  label="Confidence"
+                  value={`${Math.round(receipt?.confidence ?? 0)}%`}
+                />
+              </div>
+              <div className="rounded-3xl border bg-muted/30 p-4 text-sm leading-7 text-muted-foreground">
+                {receipt?.notes || "No notes returned."}
+              </div>
+              {receipt?.sourceFileUrl ? (
+                <div className="flex flex-wrap gap-3">
+                  <Button size="sm" asChild>
+                    <a href={receipt.sourceFileUrl} target="_blank" rel="noreferrer">
+                      <ImageUp data-icon="inline-start" />
+                      Open source file
+                    </a>
+                  </Button>
+                  <div className="rounded-full bg-muted px-3 py-2 text-xs text-muted-foreground">
+                    Saved from {receipt.sourceFileName}
+                  </div>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className="border-border">
+            <CardHeader>
+              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                <div className="flex flex-col gap-1.5">
+                  <CardTitle>Extracted line items</CardTitle>
+                  <CardDescription>
+                    Description, quantity, price, category, and taxable sales for
+                    each receipt row.
+                  </CardDescription>
+                </div>
+                <Badge variant="secondary">
+                  {receipt?.items.length ?? 0} rows extracted
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Description</TableHead>
+                    <TableHead className="text-right">Qty</TableHead>
+                    <TableHead className="text-right">Price</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead className="text-right">Taxable sales</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(receipt?.items ?? []).map((item, index) => (
+                    <TableRow key={`${item.description}-${index}`}>
+                      <TableCell className="min-w-52 font-medium">
+                        {item.description}
+                      </TableCell>
+                      <TableCell className="text-right">{item.quantity}</TableCell>
+                      <TableCell className="text-right">
+                        {formatCurrency(item.price)}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{item.category}</Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {formatCurrency(item.taxableSales)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+                <TableFooter>
+                  <TableRow>
+                    <TableCell className="font-semibold">Total amount due</TableCell>
+                    <TableCell className="text-right" colSpan={3}>
+                      {totals.quantityCount} total units
+                    </TableCell>
+                    <TableCell className="text-right font-semibold">
+                      {formatCurrency(receipt?.totalAmountDue ?? 0)}
+                    </TableCell>
+                  </TableRow>
+                </TableFooter>
+              </Table>
+            </CardContent>
+          </Card>
+        </section>
+
+        <section>
+          <Card className="border-border">
+            <CardHeader>
+              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                <div className="flex flex-col gap-1.5">
+                  <CardTitle>Saved receipts</CardTitle>
+                  <CardDescription>
+                    Persisted receipt history loaded from the local store and ready
+                    for review.
+                  </CardDescription>
+                </div>
+                <Badge variant="outline">
+                  {isLoadingReceipts ? "Loading..." : `${receipts.length} saved`}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Merchant</TableHead>
+                    <TableHead>Source file</TableHead>
+                    <TableHead>Purchase date</TableHead>
+                    <TableHead className="text-right">Total due</TableHead>
+                    <TableHead className="text-right">Saved</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {receipts.length > 0 ? (
+                    receipts.map((savedReceipt) => (
+                      <TableRow key={savedReceipt.id}>
+                        <TableCell className="font-medium">
+                          {savedReceipt.merchantName || "Unknown merchant"}
+                        </TableCell>
+                        <TableCell>{savedReceipt.sourceFileName}</TableCell>
+                        <TableCell>{savedReceipt.purchaseDate || "Unknown"}</TableCell>
+                        <TableCell className="text-right">
+                          {formatCurrency(savedReceipt.totalAmountDue)}
+                        </TableCell>
+                        <TableCell className="text-right text-muted-foreground">
+                          {new Intl.DateTimeFormat("en-PH", {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                          }).format(new Date(savedReceipt.createdAt))}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setReceipt(savedReceipt)}
+                            >
+                              View
+                            </Button>
+                            <Button size="sm" asChild>
+                              <a
+                                href={savedReceipt.sourceFileUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                <ExternalLink data-icon="inline-start" />
+                                File
+                              </a>
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell
+                        colSpan={6}
+                        className="py-10 text-center text-muted-foreground"
+                      >
+                        No receipts saved yet. Upload your first batch to build the
+                        records table.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </section>
+      </div>
+    </main>
+  )
+}
+
+function AnimatedReceiptLoader({
+  progress,
+  statusMessage,
+  activeHighlight,
+}: {
+  progress: number
+  statusMessage: string
+  activeHighlight: string
+}) {
+  return (
+    <div className="grid gap-4 rounded-3xl border bg-muted/35 p-4 md:grid-cols-[0.85fr_1.15fr]">
+      <div className="relative overflow-hidden rounded-[1.5rem] border bg-card p-4">
+        <div className="receipt-scan-line absolute inset-x-0 top-0 h-16" />
+        <div className="receipt-float flex h-full flex-col gap-3 rounded-[1.2rem] border border-dashed bg-muted/35 p-4">
+          <div className="flex items-center justify-between">
+            <div className="text-xs tracking-[0.18em] text-muted-foreground uppercase">
+              Receipt scan
+            </div>
+            <LoaderCircle className="size-4 animate-spin text-primary" />
+          </div>
+          <div className="h-3 w-2/3 rounded-full bg-muted" />
+          <div className="h-2 w-full rounded-full bg-muted" />
+          <div className="h-2 w-5/6 rounded-full bg-muted" />
+          <div className="h-2 w-4/6 rounded-full bg-muted" />
+          <div className="mt-3 grid gap-2">
+            {[52, 84, 68, 91].map((width, index) => (
+              <div
+                key={width}
+                className="flex items-center justify-between rounded-2xl bg-muted/60 px-3 py-2"
+                style={{ animationDelay: `${index * 120}ms` }}
+              >
+                <div
+                  className="h-2 rounded-full bg-muted-foreground/30"
+                  style={{ width: `${width}%` }}
+                />
+                <div className="ml-3 h-2 w-10 rounded-full bg-primary/40" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+          <CheckCircle2 className="size-4 text-primary" />
+          {statusMessage}
+        </div>
+        <div className="rounded-2xl bg-muted/70 p-3 text-sm text-muted-foreground">
+          {activeHighlight}
+        </div>
+        <div className="grid gap-2">
+          {[0, 1, 2].map((index) => (
+            <div
+              key={index}
+              className="receipt-shimmer flex items-center gap-3 overflow-hidden rounded-2xl border bg-card px-3 py-3"
+              style={{ animationDelay: `${index * 150}ms` }}
+            >
+              <div className="size-8 rounded-2xl bg-primary/15" />
+              <div className="flex flex-1 flex-col gap-2">
+                <div className="h-2 w-2/3 rounded-full bg-muted-foreground/25" />
+                <div className="h-2 w-1/2 rounded-full bg-muted-foreground/15" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="text-xs tracking-[0.18em] text-muted-foreground uppercase">
+          Live progress {progress}%
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MetricCard({
+  icon: Icon,
+  label,
+  value,
+  detail,
+}: {
+  icon: typeof Sparkles
+  label: string
+  value: string
+  detail: string
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-3xl border bg-card p-4 shadow-sm">
+      <div className="flex items-center gap-3">
+        <div className="flex size-10 items-center justify-center rounded-2xl bg-accent text-accent-foreground">
+          <Icon className="size-4" />
+        </div>
+        <span className="text-sm font-medium text-muted-foreground">{label}</span>
+      </div>
+      <div className="text-xl font-semibold">{value}</div>
+      <p className="text-sm leading-6 text-muted-foreground">{detail}</p>
+    </div>
+  )
+}
+
+function SignalTile({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof Sparkles
+  label: string
+  value: string
+}) {
+  return (
+    <div className="rounded-2xl border bg-muted/35 p-3">
+      <div className="flex items-center gap-2 text-xs tracking-[0.16em] text-muted-foreground uppercase">
+        <Icon className="size-3.5" />
+        {label}
+      </div>
+      <div className="mt-2 text-sm text-foreground break-words">{value}</div>
+    </div>
+  )
+}
+
+function InfoPair({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-1 rounded-2xl border bg-muted/30 p-4">
+      <span className="text-sm text-muted-foreground">{label}</span>
+      <span className="text-sm font-semibold">{value}</span>
+    </div>
+  )
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border bg-background p-4">
+      <div className="text-sm text-muted-foreground">{label}</div>
+      <div className="mt-2 text-2xl font-semibold">{value}</div>
+    </div>
+  )
+}
