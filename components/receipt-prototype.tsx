@@ -372,8 +372,9 @@ export function ReceiptPrototype() {
   )
   const activeHighlight =
     loadingHighlights[
-      Math.min(Math.floor(analysisProgress / 25), loadingHighlights.length - 1)
+    Math.min(Math.floor(analysisProgress / 25), loadingHighlights.length - 1)
     ]
+  const hasSelectedReceipts = batchStats.count > 0
 
   const statusMessage = useMemo(() => {
     if (focusedUpload && isActiveStatus(focusedUpload.status)) {
@@ -449,7 +450,7 @@ export function ReceiptPrototype() {
           if (errorPayload.error) {
             message = errorPayload.error
           }
-        } catch {}
+        } catch { }
 
         throw new Error(message)
       }
@@ -624,13 +625,13 @@ export function ReceiptPrototype() {
         item.status === "done"
           ? item
           : {
-              ...item,
-              status: "queued",
-              progress: 0,
-              streamedText: "",
-              errorMessage: "",
-              optimized: false,
-            }
+            ...item,
+            status: "queued",
+            progress: 0,
+            streamedText: "",
+            errorMessage: "",
+            optimized: false,
+          }
       )
     )
 
@@ -728,77 +729,99 @@ export function ReceiptPrototype() {
           <div className="grid items-start gap-6 xl:grid-cols-[1.15fr_0.85fr]">
             <section className="min-w-0">
               <div className="flex flex-col gap-6">
-                <div className="grid gap-4 rounded-3xl border border-dashed border-border bg-muted/40 p-4 sm:p-5 md:grid-cols-[1fr_auto] md:items-end">
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    <Upload className="size-4" />
-                    Upload receipt images or PDFs
-                  </div>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Badge variant="secondary">Primary action</Badge>
-                    Select files, then run analysis
-                  </div>
-                  <label className="flex cursor-pointer flex-col gap-2 rounded-2xl border border-primary/40 bg-background px-4 py-4 text-sm shadow-sm ring-1 ring-primary/20 transition-colors hover:bg-accent hover:text-accent-foreground hover:ring-primary/35">
-                    <span className="font-medium text-foreground">
-                      {batchStats.count > 0
-                        ? `${batchStats.count} receipts selected`
-                        : "No receipts chosen yet"}
-                    </span>
-                    <span className="text-muted-foreground">
-                      Great for weekly reimbursements and monthly bookkeeping runs.
-                    </span>
-                    <input
-                      type="file"
-                      accept="image/*,.pdf"
-                      multiple
-                      className="sr-only"
-                      onChange={(event) => {
-                        const files = Array.from(event.target.files ?? [])
-                        const nextQueueItems = files.map(createQueueItem)
+                <div className="gap-4 rounded-3xl border border-dashed border-border bg-muted/40 p-4 sm:p-5">
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <Upload className="size-4 text-primary" />
+                      Upload receipt images or PDFs
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Badge variant="secondary">Start here</Badge>
+                      Choose files first, then run analysis
+                    </div>
+                    <label className="flex w-full cursor-pointer flex-col gap-4 rounded-[1.75rem] border border-primary/35 bg-background px-4 py-4 text-sm shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/55 sm:px-5 sm:py-5">
+                      <div className="flex flex-col gap-4">
+                        <div className="flex items-start gap-3">
+                          <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/20">
+                            <Upload className="size-5" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <span className="text-base font-semibold text-foreground">
+                              {hasSelectedReceipts
+                                ? `${batchStats.count} receipt${batchStats.count === 1 ? "" : "s"} selected`
+                                : "Click to upload your receipts"}
+                            </span>
+                            <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
+                              Drag in images or PDFs for weekly reimbursements and month-end bookkeeping runs.
+                            </p>
+                          </div>
+                        </div>
+                        <Badge
+                          variant={hasSelectedReceipts ? "success" : "outline"}
+                          className="w-fit px-3 py-1"
+                        >
+                          {hasSelectedReceipts ? "Ready to analyze" : "Primary action"}
+                        </Badge>
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                        <span className="rounded-full bg-background/80 px-3 py-1.5 shadow-sm">
+                          {hasSelectedReceipts
+                            ? `${batchStats.count} files · ${formatFileSize(batchStats.totalBytes)}`
+                            : "PNG, JPG, WEBP, or PDF"}
+                        </span>
+                        <span className="rounded-full bg-background/80 px-3 py-1.5 shadow-sm">
+                          Large images are auto-optimized before upload
+                        </span>
+                      </div>
+                      <input
+                        type="file"
+                        accept="image/*,.pdf"
+                        multiple
+                        className="sr-only"
+                        onChange={(event) => {
+                          const files = Array.from(event.target.files ?? [])
+                          const nextQueueItems = files.map(createQueueItem)
 
-                        setQueueItems(nextQueueItems)
-                        setFocusedUploadId(nextQueueItems[0]?.id ?? null)
+                          setQueueItems(nextQueueItems)
+                          setFocusedUploadId(nextQueueItems[0]?.id ?? null)
+                          setErrorMessage("")
+                        }}
+                      />
+                    </label>
+                    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground mb-2">
+                      <span className="rounded-full bg-background px-3 py-1">
+                        Up to {MAX_PARALLEL_UPLOADS} receipts processed at once
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap justify-between gap-2 sm:gap-3">
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setFocusedUploadId(queueItems[0]?.id ?? null)
                         setErrorMessage("")
                       }}
-                    />
-                  </label>
-                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    <span className="rounded-full bg-background px-3 py-1">
-                      {batchStats.count > 0
-                        ? `${batchStats.count} files · ${formatFileSize(batchStats.totalBytes)}`
-                        : "PNG, JPG, WEBP, or PDF"}
-                    </span>
-                    <span className="rounded-full bg-background px-3 py-1">
-                      Large images are auto-optimized before upload
-                    </span>
-                    <span className="rounded-full bg-background px-3 py-1">
-                      Up to {MAX_PARALLEL_UPLOADS} receipts processed at once
-                    </span>
+                      disabled={queueItems.length === 0}
+                    >
+                      Focus list
+                    </Button>
+                    <Button
+                      onClick={runAnalysis}
+                      disabled={isAnalyzing || queueItems.length === 0}
+                      className={cn(
+                        "shadow-sm ring-1 transition-all",
+                        hasSelectedReceipts
+                          ? "selected-action-glow border-primary/30 ring-primary/35 hover:ring-primary/55"
+                          : "ring-primary/20 hover:ring-primary/35"
+                      )}
+                    >
+                      <ScanSearch data-icon="inline-start" />
+                      {isAnalyzing
+                        ? "Analyzing batch..."
+                        : `Analyze ${batchStats.count || ""} receipt${batchStats.count === 1 ? "" : "s"}`.trim()}
+                    </Button>
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2 sm:gap-3">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setFocusedUploadId(queueItems[0]?.id ?? null)
-                      setErrorMessage("")
-                    }}
-                    disabled={queueItems.length === 0}
-                  >
-                    Focus list
-                  </Button>
-                  <Button
-                    onClick={runAnalysis}
-                    disabled={isAnalyzing || queueItems.length === 0}
-                    className="shadow-sm ring-1 ring-primary/30 hover:ring-primary/50"
-                  >
-                    <ScanSearch data-icon="inline-start" />
-                    {isAnalyzing
-                      ? "Analyzing batch..."
-                      : `Analyze ${batchStats.count || ""} receipt${batchStats.count === 1 ? "" : "s"}`.trim()}
-                  </Button>
-                </div>
-              </div>
 
                 <Card className="border-border bg-card shadow-none">
                   <CardContent className="flex flex-col gap-5 py-5">
@@ -882,7 +905,7 @@ export function ReceiptPrototype() {
                         className={cn(
                           "flex w-full flex-col items-start gap-3 rounded-2xl border px-3 py-3 text-left transition-colors sm:flex-row sm:items-center sm:gap-4 sm:px-4",
                           focusedUpload?.id === item.id
-                            ? "border-primary/40 bg-accent text-accent-foreground"
+                            ? "border-primary/40 bg-background text-foreground shadow-sm"
                             : "border-border hover:bg-accent hover:text-accent-foreground"
                         )}
                         onClick={() => setFocusedUploadId(item.id)}
@@ -1122,7 +1145,7 @@ export function ReceiptPrototype() {
                   </CardDescription>
                 </div>
                 {receipt?.sourceFileName ? (
-                  <Badge variant="outline" className="max-w-full truncate sm:max-w-72">
+                  <Badge variant="outline" className="max-w-full">
                     {receipt.sourceFileName}
                   </Badge>
                 ) : null}
@@ -1255,9 +1278,9 @@ function AnimatedReceiptLoader({
 }) {
   return (
     <div className="grid gap-4 rounded-3xl border bg-muted/35 p-4 md:grid-cols-[0.85fr_1.15fr]">
-      <div className="relative overflow-hidden rounded-[1.5rem] border bg-card p-4">
+      <div className="relative overflow-hidden rounded-[1.5rem] border bg-linear-to-br from-card to-amber-50/40 p-4">
         <div className="receipt-scan-line absolute inset-x-0 top-0 h-16" />
-        <div className="receipt-float flex h-full flex-col gap-3 rounded-[1.2rem] border border-dashed bg-muted/35 p-4">
+        <div className="receipt-float flex h-full flex-col gap-3 rounded-[1.2rem] border border-dashed border-primary/20 bg-muted/35 p-4">
           <div className="flex items-center justify-between">
             <div className="text-xs tracking-[0.18em] text-muted-foreground uppercase">
               Reading receipt
@@ -1272,7 +1295,7 @@ function AnimatedReceiptLoader({
             {[52, 84, 68, 91].map((width, index) => (
               <div
                 key={width}
-                className="flex items-center justify-between rounded-2xl bg-muted/60 px-3 py-2"
+                className="flex items-center justify-between rounded-2xl bg-linear-to-r from-muted/80 to-amber-50/55 px-3 py-2"
                 style={{ animationDelay: `${index * 120}ms` }}
               >
                 <div
@@ -1290,7 +1313,7 @@ function AnimatedReceiptLoader({
           <CheckCircle2 className="size-4 text-primary" />
           {statusMessage}
         </div>
-        <div className="rounded-2xl bg-muted/70 p-3 text-sm text-muted-foreground">
+        <div className="rounded-2xl bg-linear-to-r from-amber-500/10 via-background to-emerald-500/10 p-3 text-sm text-muted-foreground">
           {activeHighlight}
         </div>
         <div className="grid gap-2">

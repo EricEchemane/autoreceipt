@@ -173,6 +173,33 @@
   }
 }
 
+@keyframes action-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--primary) 28%, transparent),
+      0 10px 30px -18px color-mix(in oklab, var(--primary) 38%, transparent);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--primary) 46%, transparent),
+      0 0 0 8px color-mix(in oklab, var(--primary) 12%, transparent),
+      0 18px 42px -20px color-mix(in oklab, var(--primary) 55%, transparent);
+  }
+}
+
+@keyframes upload-spotlight {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
 .receipt-scan-line {
   background: linear-gradient(
     180deg,
@@ -191,4 +218,19 @@
 
 .receipt-shimmer {
   animation: receipt-shimmer 1.8s ease-in-out infinite;
+}
+
+.selected-action-glow {
+  animation: action-glow 2.2s ease-in-out infinite;
+}
+
+.upload-spotlight {
+  background-image:
+    radial-gradient(circle at top left, color-mix(in oklab, var(--primary) 18%, transparent) 0%, transparent 42%),
+    linear-gradient(135deg, color-mix(in oklab, var(--primary) 9%, white) 0%, color-mix(in oklab, var(--accent) 55%, white) 100%);
+  background-size: 180% 180%;
+  animation: upload-spotlight 6s ease-in-out infinite;
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--primary) 18%, transparent),
+    0 24px 60px -34px color-mix(in oklab, var(--primary) 45%, transparent);
 }
