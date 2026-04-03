@@ -13,13 +13,13 @@ function Progress({
     <div
       data-slot="progress"
       className={cn(
-        "bg-muted relative h-2 w-full overflow-hidden rounded-full",
+        "bg-muted/80 relative h-2 w-full overflow-hidden rounded-full ring-1 ring-border/60",
         className
       )}
       {...props}
     >
       <div
-        className="bg-primary h-full rounded-full transition-[width] duration-300 ease-out"
+        className="bg-foreground h-full rounded-full transition-[width] duration-300 ease-out"
         style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
       />
     </div>

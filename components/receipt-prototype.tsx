@@ -1,13 +1,14 @@
 "use client"
 
-import { useEffect, useMemo, useState, useTransition } from "react"
+import Link from "next/link"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowUpRight,
   CheckCircle2,
-  ExternalLink,
+  ChevronDown,
+  ChevronUp,
   FileSearch,
   Files,
-  ImageUp,
   LoaderCircle,
   ScanSearch,
   ShieldCheck,
@@ -28,32 +29,49 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
+import { Separator } from "@/components/ui/separator"
 import {
   Table,
   TableBody,
   TableCell,
-  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
 
-const MAX_PARALLEL_UPLOADS = 2
+const DEFAULT_PARALLEL_UPLOADS = 4
+const MAX_ALLOWED_PARALLEL_UPLOADS = 8
+const MIN_ALLOWED_PARALLEL_UPLOADS = 1
+
+function resolveParallelUploads() {
+  const raw = Number(process.env.NEXT_PUBLIC_MAX_PARALLEL_RECEIPTS)
+
+  if (!Number.isFinite(raw)) {
+    return DEFAULT_PARALLEL_UPLOADS
+  }
+
+  return Math.min(
+    MAX_ALLOWED_PARALLEL_UPLOADS,
+    Math.max(MIN_ALLOWED_PARALLEL_UPLOADS, Math.floor(raw))
+  )
+}
+
+const MAX_PARALLEL_UPLOADS = resolveParallelUploads()
 const RECEIPT_REQUEST_TIMEOUT_MS = 90000
 
 const statusSteps = [
-  "Queued for analysis",
-  "Preparing and uploading",
-  "OpenAI extraction",
-  "Saved and review-ready",
+  "Waiting to start",
+  "Getting receipt ready",
+  "Reading receipt details",
+  "Saved and ready to review",
 ]
 
 const loadingHighlights = [
-  "Compressing large images before upload to keep the batch moving",
-  "Running multiple receipts concurrently with a small parallel queue",
-  "Streaming structured JSON while extraction is still in progress",
-  "Saving finished receipts immediately so completed rows appear fast",
+  "Preparing large files before upload so the batch keeps moving",
+  "Processing multiple receipts at once for faster turnaround",
+  "Showing updates as each receipt is being read",
+  "Saving finished receipts right away so you can review sooner",
 ]
 
 type UploadQueueItemStatus =
@@ -149,13 +167,13 @@ function getStatusLabel(status: UploadQueueItemStatus) {
     case "ready":
       return "Ready"
     case "queued":
-      return "Queued"
+      return "Waiting"
     case "preparing":
-      return "Preparing"
+      return "Getting ready"
     case "uploading":
-      return "Uploading"
+      return "Sending"
     case "extracting":
-      return "Extracting"
+      return "Reading"
     case "saving":
       return "Saving"
     case "done":
@@ -237,13 +255,14 @@ async function optimizeImageForUpload(file: File) {
 }
 
 export function ReceiptPrototype() {
-  const [receipt, setReceipt] = useState<StoredReceipt | null>(null)
   const [receipts, setReceipts] = useState<StoredReceipt[]>([])
+  const [selectedRecentReceiptId, setSelectedRecentReceiptId] = useState<string | null>(null)
   const [queueItems, setQueueItems] = useState<UploadQueueItem[]>([])
   const [focusedUploadId, setFocusedUploadId] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState("")
   const [isLoadingReceipts, setIsLoadingReceipts] = useState(true)
-  const [, startTransition] = useTransition()
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false)
+  const recentReceiptsRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     async function loadReceipts() {
@@ -253,7 +272,7 @@ export function ReceiptPrototype() {
         const nextReceipts = payload.receipts ?? []
 
         setReceipts(nextReceipts)
-        setReceipt(nextReceipts[0] ?? null)
+        setSelectedRecentReceiptId(nextReceipts[0]?.id ?? null)
       } catch (error) {
         setErrorMessage(
           error instanceof Error ? error.message : "Could not load saved receipts."
@@ -281,14 +300,16 @@ export function ReceiptPrototype() {
     )
   }, [focusedUploadId, queueItems])
 
-  const totals = useMemo(
-    () => ({
-      itemCount: receipt?.items.length ?? 0,
-      quantityCount:
-        receipt?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0,
-    }),
-    [receipt]
-  )
+  const selectedRecentReceipt = useMemo(() => {
+    if (selectedRecentReceiptId) {
+      const match = receipts.find((item) => item.id === selectedRecentReceiptId)
+      if (match) {
+        return match
+      }
+    }
+
+    return receipts[0] ?? null
+  }, [receipts, selectedRecentReceiptId])
 
   const batchStats = useMemo(() => {
     const completed = queueItems.filter((item) => item.status === "done").length
@@ -330,8 +351,9 @@ export function ReceiptPrototype() {
   )
   const activeHighlight =
     loadingHighlights[
-      Math.min(Math.floor(analysisProgress / 25), loadingHighlights.length - 1)
+    Math.min(Math.floor(analysisProgress / 25), loadingHighlights.length - 1)
     ]
+  const hasSelectedReceipts = batchStats.count > 0
 
   const statusMessage = useMemo(() => {
     if (focusedUpload && isActiveStatus(focusedUpload.status)) {
@@ -350,7 +372,7 @@ export function ReceiptPrototype() {
       return `Batch finished with ${batchStats.failed} receipt errors`
     }
 
-    return "Upload multiple receipts to start a faster batch extraction."
+    return "Upload one or more receipts to start processing."
   }, [batchStats, focusedUpload, isAnalyzing])
 
   function updateQueueItem(
@@ -360,6 +382,15 @@ export function ReceiptPrototype() {
     setQueueItems((current) =>
       current.map((item) => (item.id === id ? updater(item) : item))
     )
+  }
+
+  function jumpToRecentReceipts() {
+    window.requestAnimationFrame(() => {
+      recentReceiptsRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      })
+    })
   }
 
   async function processQueueItem(job: UploadQueueItem) {
@@ -407,7 +438,7 @@ export function ReceiptPrototype() {
           if (errorPayload.error) {
             message = errorPayload.error
           }
-        } catch {}
+        } catch { }
 
         throw new Error(message)
       }
@@ -464,6 +495,7 @@ export function ReceiptPrototype() {
         if (parsedEvent.event === "receipt") {
           const receiptData = parsedEvent.data as {
             receipt: StoredReceipt
+            duplicate?: boolean
           }
           const nextReceipt = receiptData.receipt
 
@@ -474,15 +506,17 @@ export function ReceiptPrototype() {
             status: "done",
             progress: 100,
             storedReceipt: nextReceipt,
+            errorMessage: receiptData.duplicate
+              ? "Duplicate prevented. Using the existing saved receipt."
+              : "",
           }))
 
-          startTransition(() => {
-            setReceipt(nextReceipt)
-            setReceipts((current) => [
-              nextReceipt,
-              ...current.filter((savedReceipt) => savedReceipt.id !== nextReceipt.id),
-            ])
-          })
+          setReceipts((current) => [
+            nextReceipt,
+            ...current.filter((savedReceipt) => savedReceipt.id !== nextReceipt.id),
+          ])
+          setSelectedRecentReceiptId(nextReceipt.id)
+          jumpToRecentReceipts()
         }
 
         if (parsedEvent.event === "done") {
@@ -577,13 +611,13 @@ export function ReceiptPrototype() {
         item.status === "done"
           ? item
           : {
-              ...item,
-              status: "queued",
-              progress: 0,
-              streamedText: "",
-              errorMessage: "",
-              optimized: false,
-            }
+            ...item,
+            status: "queued",
+            progress: 0,
+            streamedText: "",
+            errorMessage: "",
+            optimized: false,
+          }
       )
     )
 
@@ -612,486 +646,632 @@ export function ReceiptPrototype() {
 
   return (
     <main className="relative min-h-svh overflow-hidden">
-      <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,color-mix(in_oklab,var(--primary)_14%,transparent),transparent_38%),radial-gradient(circle_at_top_right,color-mix(in_oklab,var(--chart-4)_20%,transparent),transparent_34%),linear-gradient(180deg,var(--background),color-mix(in_oklab,var(--background)_88%,var(--muted)))]" />
+      <div className="absolute inset-0 -z-10 bg-background" />
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
-        <section className="grid items-start gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-          <Card className="min-w-0 border-border/70 bg-card/90 shadow-lg backdrop-blur">
-            <CardHeader className="gap-4">
+        <section className="min-w-0">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline" className="w-fit">
-                Multi-Receipt Extraction
+                Built for Real Bookkeeping Work
               </Badge>
-              <div className="flex flex-col gap-3">
-                <CardTitle className="max-w-2xl text-4xl leading-tight sm:text-5xl">
-                  Upload and process multiple receipts without slowing the whole
-                  batch down.
-                </CardTitle>
-                <CardDescription className="max-w-2xl text-base leading-7">
-                  The queue compresses large images locally, runs a small number of
-                  receipts in parallel, and saves each completed result immediately so
-                  you can review early wins before the batch finishes.
-                </CardDescription>
-              </div>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-6">
-              <div className="grid gap-3 sm:grid-cols-3">
-                <MetricCard
-                  icon={Files}
-                  label="Batch mode"
-                  value={`${MAX_PARALLEL_UPLOADS} at a time`}
-                  detail="A limited parallel queue keeps throughput high without overwhelming the browser or API."
-                />
-                <MetricCard
-                  icon={ShieldCheck}
-                  label="Smart upload"
-                  value="Image optimization"
-                  detail="Large image receipts are resized before upload so the faster path stays the default."
-                />
-                <MetricCard
-                  icon={ArrowUpRight}
-                  label="Saved instantly"
-                  value="Per receipt"
-                  detail="Completed receipts appear in the table right away instead of waiting for the whole batch."
-                />
-              </div>
+              <Button size="sm" variant="outline" asChild>
+                <Link href="/receipts">Open receipts</Link>
+              </Button>
+              <Button size="sm" variant="outline" asChild>
+                <Link href="/insights">Open summary</Link>
+              </Button>
+            </div>
+            <div className="flex flex-col gap-3">
+              <CardTitle className="max-w-3xl text-4xl leading-tight sm:text-5xl">
+                Turn receipt photos into clean, review-ready expense records.
+              </CardTitle>
+              <CardDescription className="max-w-3xl text-base leading-7">
+                Designed for business owners, bookkeepers, and finance staff who
+                need faster month-end cleanup. Upload receipts in batch, extract key
+                fields, and review categorized line items before posting to books.
+              </CardDescription>
+            </div>
+          </div>
+          <div className="mt-6 grid gap-3 sm:grid-cols-3">
+            <MetricCard
+              icon={Files}
+              label="Batch speed"
+              value={`${MAX_PARALLEL_UPLOADS} receipts at the same time`}
+              detail="Keeps processing fast and steady for real bookkeeping work."
+            />
+            <MetricCard
+              icon={ShieldCheck}
+              label="Review checks"
+              value="You stay in control"
+              detail="Check merchant, tax, and line details before final posting."
+            />
+            <MetricCard
+              icon={ArrowUpRight}
+              label="Record history"
+              value="Original + organized details"
+              detail="Each record keeps both the original receipt and organized data."
+            />
+          </div>
+        </section>
 
-              <div className="grid gap-4 rounded-3xl border border-dashed border-border bg-muted/40 p-4 sm:p-5 md:grid-cols-[1fr_auto] md:items-end">
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    <Upload className="size-4" />
-                    Upload one or many receipt images or PDFs
+        <section className="grid gap-4 rounded-[2rem] border bg-card/70 p-4 shadow-sm sm:p-6">
+          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+            <div className="flex flex-col gap-1">
+              <Badge variant="secondary" className="w-fit">
+                Processing workspace
+              </Badge>
+              <CardTitle className="text-2xl">Upload, process, and follow the batch live</CardTitle>
+              <CardDescription className="max-w-2xl">
+                Keep file intake, progress, and live extraction details in one working area.
+              </CardDescription>
+            </div>
+            <div className="text-sm text-muted-foreground">
+              {batchStats.count === 0
+                ? "No batch started yet"
+                : `${batchStats.completed} completed • ${batchStats.active} active • ${batchStats.failed} failed`}
+            </div>
+          </div>
+
+          <div className="grid items-start gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+            <section className="min-w-0">
+              <div className="flex flex-col gap-6">
+                <div className="gap-4 rounded-3xl border border-dashed border-border bg-muted/40 p-4 sm:p-5">
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <Upload className="size-4 text-primary" />
+                      Upload receipt images or PDFs
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Badge variant="secondary">Start here</Badge>
+                      Choose files first, then run analysis
+                    </div>
+                    <label className="flex w-full cursor-pointer flex-col gap-4 rounded-[1.75rem] border border-primary/35 bg-background px-4 py-4 text-sm shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/55 sm:px-5 sm:py-5">
+                      <div className="flex flex-col gap-4">
+                        <div className="flex items-start gap-3">
+                          <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/20">
+                            <Upload className="size-5" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <span className="text-base font-semibold text-foreground">
+                              {hasSelectedReceipts
+                                ? `${batchStats.count} receipt${batchStats.count === 1 ? "" : "s"} selected`
+                                : "Click to upload your receipts"}
+                            </span>
+                            <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
+                              Drag in images or PDFs for weekly reimbursements and month-end bookkeeping runs.
+                            </p>
+                          </div>
+                        </div>
+                        <Badge
+                          variant={hasSelectedReceipts ? "success" : "outline"}
+                          className="w-fit px-3 py-1"
+                        >
+                          {hasSelectedReceipts ? "Ready to analyze" : "Primary action"}
+                        </Badge>
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                        <span className="rounded-full bg-background/80 px-3 py-1.5 shadow-sm">
+                          {hasSelectedReceipts
+                            ? `${batchStats.count} files · ${formatFileSize(batchStats.totalBytes)}`
+                            : "PNG, JPG, WEBP, or PDF"}
+                        </span>
+                        <span className="rounded-full bg-background/80 px-3 py-1.5 shadow-sm">
+                          Large images are auto-optimized before upload
+                        </span>
+                      </div>
+                      <input
+                        type="file"
+                        accept="image/*,.pdf"
+                        multiple
+                        className="sr-only"
+                        onChange={(event) => {
+                          const files = Array.from(event.target.files ?? [])
+                          const nextQueueItems = files.map(createQueueItem)
+
+                          setQueueItems(nextQueueItems)
+                          setFocusedUploadId(nextQueueItems[0]?.id ?? null)
+                          setErrorMessage("")
+                        }}
+                      />
+                    </label>
+                    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground mb-2">
+                      <span className="rounded-full bg-background px-3 py-1">
+                        Up to {MAX_PARALLEL_UPLOADS} receipts processed at once
+                      </span>
+                    </div>
                   </div>
-                  <label className="flex cursor-pointer flex-col gap-2 rounded-2xl border bg-background px-4 py-4 text-sm shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground">
-                    <span className="font-medium text-foreground">
-                      {batchStats.count > 0
-                        ? `${batchStats.count} receipts selected`
-                        : "No receipts chosen yet"}
-                    </span>
-                    <span className="text-muted-foreground">
-                      The batch is processed with a capped parallel queue so it stays
-                      fast and predictable.
-                    </span>
-                    <input
-                      type="file"
-                      accept="image/*,.pdf"
-                      multiple
-                      className="sr-only"
-                      onChange={(event) => {
-                        const files = Array.from(event.target.files ?? [])
-                        const nextQueueItems = files.map(createQueueItem)
-
-                        setQueueItems(nextQueueItems)
-                        setFocusedUploadId(nextQueueItems[0]?.id ?? null)
+                  <div className="flex flex-wrap justify-between gap-2 sm:gap-3">
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setFocusedUploadId(queueItems[0]?.id ?? null)
                         setErrorMessage("")
                       }}
-                    />
-                  </label>
-                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    <span className="rounded-full bg-background px-3 py-1">
-                      {batchStats.count > 0
-                        ? `${batchStats.count} files · ${formatFileSize(batchStats.totalBytes)}`
-                        : "PNG, JPG, WEBP, or PDF"}
-                    </span>
-                    <span className="rounded-full bg-background px-3 py-1">
-                      Large images are resized in the browser before upload
-                    </span>
-                    <span className="rounded-full bg-background px-3 py-1">
-                      Up to {MAX_PARALLEL_UPLOADS} receipts are processed in parallel
-                    </span>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2 sm:gap-3">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setFocusedUploadId(queueItems[0]?.id ?? null)
-                      setErrorMessage("")
-                    }}
-                    disabled={queueItems.length === 0}
-                  >
-                    Focus batch
-                  </Button>
-                  <Button onClick={runAnalysis} disabled={isAnalyzing || queueItems.length === 0}>
-                    <ScanSearch data-icon="inline-start" />
-                    {isAnalyzing
-                      ? "Analyzing batch..."
-                      : `Analyze ${batchStats.count || ""} receipt${batchStats.count === 1 ? "" : "s"}`.trim()}
-                  </Button>
-                </div>
-              </div>
-
-              <Card className="border-border bg-card shadow-none">
-                <CardContent className="flex flex-col gap-5 py-5">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <div className="relative flex size-11 items-center justify-center rounded-2xl border bg-muted">
-                        {isAnalyzing ? (
-                          <LoaderCircle className="size-5 animate-spin" />
-                        ) : (
-                          <FileSearch className="size-5" />
-                        )}
-                      </div>
-                      <div className="flex min-w-0 flex-1 flex-col">
-                        <span className="text-sm font-medium">
-                          {isAnalyzing ? "Batch extraction in progress" : "Batch ready"}
-                        </span>
-                        <span className="text-sm text-muted-foreground break-words">
-                          {statusMessage}
-                        </span>
-                      </div>
-                    </div>
-                    <Badge
-                      variant={
-                        batchStats.failed > 0 && !isAnalyzing ? "destructive" : analysisProgress === 100 && batchStats.count > 0 ? "success" : "warning"
-                      }
-                      className="w-fit border-0 sm:self-start"
+                      disabled={queueItems.length === 0}
                     >
-                      {batchStats.count === 0
-                        ? "No batch yet"
-                        : `${analysisProgress}% overall`}
-                    </Badge>
+                      Focus list
+                    </Button>
+                    <Button
+                      onClick={runAnalysis}
+                      disabled={isAnalyzing || queueItems.length === 0}
+                      className={cn(
+                        "shadow-sm ring-1 transition-all",
+                        hasSelectedReceipts
+                          ? "selected-action-glow border-primary/30 ring-primary/35 hover:ring-primary/55"
+                          : "ring-primary/20 hover:ring-primary/35"
+                      )}
+                    >
+                      <ScanSearch data-icon="inline-start" />
+                      {isAnalyzing
+                        ? "Analyzing batch..."
+                        : `Analyze ${batchStats.count || ""} receipt${batchStats.count === 1 ? "" : "s"}`.trim()}
+                    </Button>
                   </div>
-                  <Progress value={analysisProgress} />
-                  <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
-                    <SignalTile
-                      icon={Zap}
-                      label="Throughput"
-                      value={`${batchStats.active}/${MAX_PARALLEL_UPLOADS} workers active`}
-                    />
-                    <SignalTile
-                      icon={ScanSearch}
-                      label="Current focus"
-                      value={activeHighlight}
-                    />
-                    <SignalTile
-                      icon={TimerReset}
-                      label="Batch state"
-                      value={`${batchStats.completed} done · ${batchStats.queued} queued`}
-                    />
-                  </div>
-                  <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
-                    {statusSteps.map((step, index) => (
-                      <div
-                        key={step}
-                        className={cn(
-                          "flex items-center gap-2 rounded-2xl border px-3 py-2 transition-all",
-                          index <= activeStep
-                            ? "border-primary/40 bg-primary/10 text-foreground"
-                            : "border-border bg-muted/30"
-                        )}
-                      >
-                        <div
-                          className={cn(
-                            "size-2.5 rounded-full",
-                            index <= activeStep ? "bg-primary" : "bg-muted-foreground/50"
+                </div>
+
+                <Card className="border-border bg-card shadow-none">
+                  <CardContent className="flex flex-col gap-5 py-5">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="relative flex size-11 items-center justify-center rounded-2xl border bg-muted">
+                          {isAnalyzing ? (
+                            <LoaderCircle className="size-5 animate-spin" />
+                          ) : (
+                            <FileSearch className="size-5" />
                           )}
-                        />
-                        <span>{step}</span>
+                        </div>
+                        <div className="flex min-w-0 flex-1 flex-col">
+                          <span className="text-sm font-medium">
+                            {isAnalyzing ? "Working on your receipts" : "Batch ready"}
+                          </span>
+                          <span className="text-sm text-muted-foreground break-words">
+                            {statusMessage}
+                          </span>
+                        </div>
                       </div>
+                      <Badge
+                        variant={
+                          batchStats.failed > 0 && !isAnalyzing ? "destructive" : analysisProgress === 100 && batchStats.count > 0 ? "success" : "warning"
+                        }
+                        className="w-fit border-0 sm:self-start"
+                      >
+                        {batchStats.count === 0
+                          ? "No batch yet"
+                          : `${analysisProgress}% overall`}
+                      </Badge>
+                    </div>
+                    <Progress value={analysisProgress} />
+                    <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+                      <SignalTile
+                        icon={Zap}
+                        label="In progress"
+                        value={`${batchStats.active}/${MAX_PARALLEL_UPLOADS} receipts active`}
+                      />
+                      <SignalTile
+                        icon={ScanSearch}
+                        label="Current update"
+                        value={activeHighlight}
+                      />
+                      <SignalTile
+                        icon={TimerReset}
+                        label="Batch progress"
+                        value={`${batchStats.completed} done · ${batchStats.queued} waiting`}
+                      />
+                    </div>
+                    <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
+                      {statusSteps.map((step, index) => (
+                        <div
+                          key={step}
+                          className={cn(
+                            "flex items-center gap-2 rounded-2xl border px-3 py-2 transition-all",
+                            index <= activeStep
+                              ? "border-primary/40 bg-primary/10 text-foreground"
+                              : "border-border bg-muted/30"
+                          )}
+                        >
+                          <div
+                            className={cn(
+                              "size-2.5 rounded-full",
+                              index <= activeStep ? "bg-primary" : "bg-muted-foreground/50"
+                            )}
+                          />
+                          <span>{step}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {queueItems.length > 0 ? (
+                  <div className="grid min-w-0 gap-2 rounded-3xl border bg-background p-2 sm:p-3">
+                    {queueItems.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={cn(
+                          "flex w-full flex-col items-start gap-3 rounded-2xl border px-3 py-3 text-left transition-colors sm:flex-row sm:items-center sm:gap-4 sm:px-4",
+                          focusedUpload?.id === item.id
+                            ? "border-primary/40 bg-background text-foreground shadow-sm"
+                            : "border-border hover:bg-accent hover:text-accent-foreground"
+                        )}
+                        onClick={() => setFocusedUploadId(item.id)}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                              {item.fileName}
+                            </span>
+                            {item.optimized ? (
+                              <Badge variant="outline">Optimized</Badge>
+                            ) : null}
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {formatFileSize(item.fileSize)}
+                          </div>
+                          <Progress value={item.progress} className="mt-3 h-1.5" />
+                        </div>
+                        <div className="flex w-full flex-row items-center justify-between gap-2 sm:w-auto sm:flex-col sm:items-end">
+                          <Badge variant={getStatusBadgeVariant(item.status)}>
+                            {getStatusLabel(item.status)}
+                          </Badge>
+                          <span className="text-xs text-muted-foreground">
+                            {item.progress}%
+                          </span>
+                        </div>
+                      </button>
                     ))}
                   </div>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="min-w-0">
+              <Card className="border-border shadow-none">
+                <CardHeader>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-col gap-1.5">
+                      <CardTitle className="text-2xl">Live receipt details</CardTitle>
+                      <CardDescription>
+                        Follow the selected receipt while we read and save it.
+                      </CardDescription>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowTechnicalDetails((current) => !current)}
+                    >
+                      {showTechnicalDetails ? (
+                        <ChevronUp data-icon="inline-start" />
+                      ) : (
+                        <ChevronDown data-icon="inline-start" />
+                      )}
+                      {showTechnicalDetails ? "Hide detailed view" : "Show detailed view"}
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Sparkles className="size-4" />
+                      <span className="truncate">Live updates</span>
+                    </div>
+                    <Badge variant="outline" className="max-w-full truncate sm:max-w-56">
+                      {focusedUpload ? focusedUpload.fileName : "No selected receipt"}
+                    </Badge>
+                  </div>
+                  {showTechnicalDetails ? (
+                    <>
+                      {focusedUpload && isActiveStatus(focusedUpload.status) ? (
+                        <AnimatedReceiptLoader
+                          progress={focusedUpload.progress}
+                          statusMessage={`${focusedUpload.fileName}: ${getStatusLabel(focusedUpload.status)}`}
+                          activeHighlight={activeHighlight}
+                        />
+                      ) : null}
+                      <div className="relative min-h-80 min-w-0 overflow-hidden rounded-3xl border bg-muted/35 p-4">
+                        {focusedUpload && isActiveStatus(focusedUpload.status) ? (
+                          <div className="receipt-scan-line absolute inset-x-4 top-0 h-20" />
+                        ) : null}
+                        <pre className="overflow-x-auto font-mono text-xs leading-6 text-foreground whitespace-pre-wrap break-words">
+                          {focusedUpload?.streamedText ||
+                            '{\n  "message": "No live update yet."\n}'}
+                        </pre>
+                      </div>
+                      {errorMessage ? (
+                        <div className="rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+                          {errorMessage}
+                        </div>
+                      ) : null}
+                      {focusedUpload?.errorMessage ? (
+                        <div className="rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+                          {focusedUpload.errorMessage}
+                        </div>
+                      ) : (
+                        <div className="rounded-2xl border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+                          Select a receipt in the list to see progress and results.
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="rounded-2xl border bg-muted/35 p-4">
+                      {focusedUpload && isActiveStatus(focusedUpload.status) ? (
+                        <AnimatedReceiptLoader
+                          progress={focusedUpload.progress}
+                          statusMessage={`${focusedUpload.fileName}: ${getStatusLabel(focusedUpload.status)}`}
+                          activeHighlight={activeHighlight}
+                        />
+                      ) : (
+                        <p className="text-sm text-muted-foreground">
+                          Detailed view is hidden. You can open it anytime to see live updates.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
-
-              {queueItems.length > 0 ? (
-                <div className="grid min-w-0 gap-2 rounded-3xl border bg-background p-2 sm:p-3">
-                  {queueItems.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={cn(
-                        "flex w-full flex-col items-start gap-3 rounded-2xl border px-3 py-3 text-left transition-colors sm:flex-row sm:items-center sm:gap-4 sm:px-4",
-                        focusedUpload?.id === item.id
-                          ? "border-primary/40 bg-accent text-accent-foreground"
-                          : "border-border hover:bg-accent hover:text-accent-foreground"
-                      )}
-                      onClick={() => setFocusedUploadId(item.id)}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                            {item.fileName}
-                          </span>
-                          {item.optimized ? (
-                            <Badge variant="outline">Optimized</Badge>
-                          ) : null}
-                        </div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          {formatFileSize(item.fileSize)}
-                        </div>
-                        <Progress value={item.progress} className="mt-3 h-1.5" />
-                      </div>
-                      <div className="flex w-full flex-row items-center justify-between gap-2 sm:w-auto sm:flex-col sm:items-end">
-                        <Badge variant={getStatusBadgeVariant(item.status)}>
-                          {getStatusLabel(item.status)}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground">
-                          {item.progress}%
-                        </span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
-
-          <Card className="min-w-0 border-border bg-card shadow-lg">
-            <CardHeader>
-              <CardTitle className="text-2xl">Focused stream</CardTitle>
-              <CardDescription>
-                Watch the currently selected receipt as it moves through the batch.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex h-full flex-col gap-4">
-              <div className="flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex min-w-0 items-center gap-2">
-                  <Sparkles className="size-4" />
-                  <span className="truncate">Streaming from `/api/receipts/extract`</span>
-                </div>
-                <Badge variant="outline" className="max-w-full truncate sm:max-w-56">
-                  {focusedUpload ? focusedUpload.fileName : "No focused receipt"}
-                </Badge>
-              </div>
-              {focusedUpload && isActiveStatus(focusedUpload.status) ? (
-                <AnimatedReceiptLoader
-                  progress={focusedUpload.progress}
-                  statusMessage={`${focusedUpload.fileName}: ${getStatusLabel(focusedUpload.status)}`}
-                  activeHighlight={activeHighlight}
-                />
-              ) : null}
-              <div className="relative min-h-80 min-w-0 overflow-hidden rounded-3xl border bg-muted/35 p-4">
-                {focusedUpload && isActiveStatus(focusedUpload.status) ? (
-                  <div className="receipt-scan-line absolute inset-x-4 top-0 h-20" />
-                ) : null}
-                <pre className="overflow-x-auto font-mono text-xs leading-6 text-foreground whitespace-pre-wrap break-words">
-                  {focusedUpload?.streamedText ||
-                    '{\n  "message": "No active receipt stream yet."\n}'}
-                </pre>
-              </div>
-              {errorMessage ? (
-                <div className="rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-                  {errorMessage}
-                </div>
-              ) : null}
-              {focusedUpload?.errorMessage ? (
-                <div className="rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-                  {focusedUpload.errorMessage}
-                </div>
-              ) : (
-                <div className="rounded-2xl border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-                  Pick a receipt from the queue to inspect its live output and
-                  status updates.
-                </div>
-              )}
-            </CardContent>
-          </Card>
+            </section>
+          </div>
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
+        <section ref={recentReceiptsRef}>
           <Card className="border-border">
-            <CardHeader>
-              <CardTitle>Receipt snapshot</CardTitle>
-              <CardDescription>
-                Merchant-level fields extracted by OpenAI and validated before they
-                reach the UI.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-6">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <InfoPair
-                  label="Merchant"
-                  value={receipt?.merchantName || "No saved receipt selected"}
-                />
-                <InfoPair
-                  label="Purchase date"
-                  value={receipt?.purchaseDate || "Not found"}
-                />
-                <InfoPair label="TIN number" value={receipt?.tinNumber || "Not found"} />
-                <InfoPair
-                  label="Receipt number"
-                  value={receipt?.officialReceiptNumber || "Not found"}
-                />
-                <InfoPair
-                  label="Taxable sales"
-                  value={formatCurrency(receipt?.taxableSales ?? 0)}
-                />
-                <InfoPair
-                  label="VAT amount"
-                  value={formatCurrency(receipt?.vatAmount ?? 0)}
-                />
+            <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <CardTitle>Recent receipts</CardTitle>
+                <CardDescription>
+                  Quick view of your latest saved receipts.
+                </CardDescription>
               </div>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <MiniStat label="Line items" value={String(totals.itemCount)} />
-                <MiniStat label="Units" value={String(totals.quantityCount)} />
-                <MiniStat
-                  label="Confidence"
-                  value={`${Math.round(receipt?.confidence ?? 0)}%`}
-                />
-              </div>
-              <div className="rounded-3xl border bg-muted/30 p-4 text-sm leading-7 text-muted-foreground">
-                {receipt?.notes || "No notes returned."}
-              </div>
-              {receipt?.sourceFileUrl ? (
-                <div className="flex flex-wrap gap-3">
-                  <Button size="sm" asChild>
-                    <a href={receipt.sourceFileUrl} target="_blank" rel="noreferrer">
-                      <ImageUp data-icon="inline-start" />
-                      Open source file
-                    </a>
-                  </Button>
-                  <div className="rounded-full bg-muted px-3 py-2 text-xs text-muted-foreground">
-                    Saved from {receipt.sourceFileName}
-                  </div>
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
-
-          <Card className="border-border">
-            <CardHeader>
-              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-                <div className="flex flex-col gap-1.5">
-                  <CardTitle>Extracted line items</CardTitle>
-                  <CardDescription>
-                    Description, quantity, price, category, and taxable sales for
-                    each receipt row.
-                  </CardDescription>
-                </div>
-                <Badge variant="secondary">
-                  {receipt?.items.length ?? 0} rows extracted
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Description</TableHead>
-                    <TableHead className="text-right">Qty</TableHead>
-                    <TableHead className="text-right">Price</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead className="text-right">Taxable sales</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(receipt?.items ?? []).map((item, index) => (
-                    <TableRow key={`${item.description}-${index}`}>
-                      <TableCell className="min-w-52 font-medium">
-                        {item.description}
-                      </TableCell>
-                      <TableCell className="text-right">{item.quantity}</TableCell>
-                      <TableCell className="text-right">
-                        {formatCurrency(item.price)}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{item.category}</Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {formatCurrency(item.taxableSales)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-                <TableFooter>
-                  <TableRow>
-                    <TableCell className="font-semibold">Total amount due</TableCell>
-                    <TableCell className="text-right" colSpan={3}>
-                      {totals.quantityCount} total units
-                    </TableCell>
-                    <TableCell className="text-right font-semibold">
-                      {formatCurrency(receipt?.totalAmountDue ?? 0)}
-                    </TableCell>
-                  </TableRow>
-                </TableFooter>
-              </Table>
-            </CardContent>
-          </Card>
-        </section>
-
-        <section>
-          <Card className="border-border">
-            <CardHeader>
-              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-                <div className="flex flex-col gap-1.5">
-                  <CardTitle>Saved receipts</CardTitle>
-                  <CardDescription>
-                    Persisted receipt history loaded from the local store and ready
-                    for review.
-                  </CardDescription>
-                </div>
+              <div className="flex items-center gap-2">
                 <Badge variant="outline">
                   {isLoadingReceipts ? "Loading..." : `${receipts.length} saved`}
                 </Badge>
+                <Button size="sm" variant="outline" asChild>
+                  <Link href="/receipts">Open full receipts page</Link>
+                </Button>
               </div>
             </CardHeader>
-            <CardContent className="pt-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Merchant</TableHead>
-                    <TableHead>Source file</TableHead>
-                    <TableHead>Purchase date</TableHead>
-                    <TableHead className="text-right">Total due</TableHead>
-                    <TableHead className="text-right">Saved</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {receipts.length > 0 ? (
-                    receipts.map((savedReceipt) => (
-                      <TableRow key={savedReceipt.id}>
-                        <TableCell className="font-medium">
-                          {savedReceipt.merchantName || "Unknown merchant"}
-                        </TableCell>
-                        <TableCell>{savedReceipt.sourceFileName}</TableCell>
-                        <TableCell>{savedReceipt.purchaseDate || "Unknown"}</TableCell>
-                        <TableCell className="text-right">
-                          {formatCurrency(savedReceipt.totalAmountDue)}
-                        </TableCell>
-                        <TableCell className="text-right text-muted-foreground">
-                          {new Intl.DateTimeFormat("en-PH", {
-                            dateStyle: "medium",
-                            timeStyle: "short",
-                          }).format(new Date(savedReceipt.createdAt))}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
+            <CardContent className="grid pt-2 lg:grid-cols-[1.2fr_0.8fr]">
+              <div className="overflow-x-auto rounded-2xl border border-r-0 rounded-r-none">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Merchant</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead className="text-right">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {receipts.length > 0 ? (
+                      receipts.slice(0, 6).map((savedReceipt) => (
+                        <TableRow
+                          key={savedReceipt.id}
+                          className={cn(
+                            "cursor-pointer transition-colors",
+                            selectedRecentReceipt?.id === savedReceipt.id && "bg-accent/45"
+                          )}
+                          onClick={() => setSelectedRecentReceiptId(savedReceipt.id)}
+                        >
+                          <TableCell className="font-medium">
+                            {savedReceipt.merchantName || "Unknown merchant"}
+                          </TableCell>
+                          <TableCell>{savedReceipt.purchaseDate || "Unknown"}</TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(savedReceipt.totalAmountDue)}
+                          </TableCell>
+                          <TableCell className="text-right">
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => setReceipt(savedReceipt)}
+                              asChild
+                              onClick={(event) => event.stopPropagation()}
                             >
-                              View
-                            </Button>
-                            <Button size="sm" asChild>
                               <a
                                 href={savedReceipt.sourceFileUrl}
                                 target="_blank"
                                 rel="noreferrer"
                               >
-                                <ExternalLink data-icon="inline-start" />
-                                File
+                                Open file
                               </a>
                             </Button>
-                          </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell
+                          colSpan={4}
+                          className="py-8 text-center text-muted-foreground"
+                        >
+                          No receipts saved yet.
                         </TableCell>
                       </TableRow>
-                    ))
-                  ) : (
-                    <TableRow>
-                      <TableCell
-                        colSpan={6}
-                        className="py-10 text-center text-muted-foreground"
-                      >
-                        No receipts saved yet. Upload your first batch to build the
-                        records table.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div
+                className={cn(
+                  "rounded-2xl border border-l-0 rounded-l-none p-4",
+                  selectedRecentReceipt ? "border-primary/10 bg-accent/45" : "bg-muted/20"
+                )}
+              >
+                {selectedRecentReceipt ? (
+                  <div className="flex flex-col gap-3">
+                    <p className="text-sm font-semibold">
+                      {selectedRecentReceipt.merchantName || "Unknown merchant"}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="secondary">
+                        TIN: {selectedRecentReceipt.tinNumber || "Not found"}
+                      </Badge>
+                      <Badge variant="secondary">
+                        Receipt #: {selectedRecentReceipt.officialReceiptNumber || "Not found"}
+                      </Badge>
+                      <Badge variant="secondary">
+                        VAT: {formatCurrency(selectedRecentReceipt.vatAmount)}
+                      </Badge>
+                    </div>
+                    <div className="rounded-xl border bg-background/85 p-3">
+                      <p className="mb-2 text-xs font-medium text-muted-foreground uppercase">
+                        Line items
+                      </p>
+                      <div className="grid gap-2">
+                        {selectedRecentReceipt.items.slice(0, 4).map((item, index) => (
+                          <div
+                            key={`${item.description}-${index}`}
+                            className="flex items-start justify-between gap-3 text-sm"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate font-medium">{item.description}</p>
+                              <p className="text-xs text-muted-foreground">
+                                Qty {item.quantity} · {item.category || "Uncategorized"}
+                              </p>
+                            </div>
+                            <span className="shrink-0 font-medium">
+                              {formatCurrency(item.price)}
+                            </span>
+                          </div>
+                        ))}
+                        {selectedRecentReceipt.items.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">No line items found.</p>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Select a receipt row to view a quick snapshot.
+                  </p>
+                )}
+              </div>
             </CardContent>
           </Card>
+        </section>
+
+        <section className="mt-6 flex flex-col gap-3 sm:mt-8 lg:mt-10">
+          <Separator />
+          <div className="flex flex-col gap-1">
+            <Badge variant="outline" className="w-fit">
+              Why teams choose AutoReceipt
+            </Badge>
+            <CardTitle className="text-2xl sm:text-3xl">
+              Built for everyday bookkeeping work
+            </CardTitle>
+            <CardDescription>
+              Keep records clean, complete, and ready for posting with less manual effort.
+            </CardDescription>
+          </div>
+        </section>
+
+        <section className="grid gap-3 rounded-2xl border bg-muted/30 p-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-xl border bg-background px-3 py-2 text-sm">
+            Secure file storage
+          </div>
+          <div className="rounded-xl border bg-background px-3 py-2 text-sm">
+            Full receipt history
+          </div>
+          <div className="rounded-xl border bg-background px-3 py-2 text-sm">
+            Duplicate detection
+          </div>
+          <div className="rounded-xl border bg-background px-3 py-2 text-sm">
+            Export-ready records
+          </div>
+        </section>
+
+        <section className="grid gap-6 lg:grid-cols-3">
+          <Card>
+            <CardHeader>
+              <Badge variant="secondary" className="w-fit">Step 1</Badge>
+              <CardTitle className="text-xl">Upload receipts</CardTitle>
+              <CardDescription>
+                Add image or PDF receipts in one batch.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader>
+              <Badge variant="secondary" className="w-fit">Step 2</Badge>
+              <CardTitle className="text-xl">Review and confirm</CardTitle>
+              <CardDescription>
+                Check merchant, tax, and line details before posting.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader>
+              <Badge variant="secondary" className="w-fit">Step 3</Badge>
+              <CardTitle className="text-xl">Export and post</CardTitle>
+              <CardDescription>
+                Export clean records and complete bookkeeping faster.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        </section>
+
+        <section className="grid gap-6 lg:grid-cols-[1fr_1fr]">
+          <Card>
+            <CardHeader>
+              <CardTitle>Designed for real teams</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              <div className="rounded-xl border px-3 py-3">
+                <p className="text-sm font-medium">Business owners</p>
+                <p className="text-sm text-muted-foreground">Track expenses without manual entry.</p>
+              </div>
+              <div className="rounded-xl border px-3 py-3">
+                <p className="text-sm font-medium">Bookkeepers</p>
+                <p className="text-sm text-muted-foreground">Review and correct receipts quickly.</p>
+              </div>
+              <div className="rounded-xl border px-3 py-3">
+                <p className="text-sm font-medium">Finance teams</p>
+                <p className="text-sm text-muted-foreground">Maintain clean records for month-end closing.</p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Common questions</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              <div className="rounded-xl border px-3 py-3">
+                <p className="text-sm font-medium">What files are supported?</p>
+                <p className="text-sm text-muted-foreground">PNG, JPG, WEBP, and PDF receipts.</p>
+              </div>
+              <div className="rounded-xl border px-3 py-3">
+                <p className="text-sm font-medium">Can I fix receipt details?</p>
+                <p className="text-sm text-muted-foreground">Yes. Use the receipts page to review and update records.</p>
+              </div>
+              <div className="rounded-xl border px-3 py-3">
+                <p className="text-sm font-medium">How are duplicates handled?</p>
+                <p className="text-sm text-muted-foreground">Possible duplicates are flagged for quick checking.</p>
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+
+        <section className="rounded-3xl border bg-card p-6 sm:p-8">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="text-2xl sm:text-3xl">
+                Ready to clean up your receipt workflow?
+              </CardTitle>
+              <CardDescription className="mt-2 text-base">
+                Start with a batch upload, then manage everything from the receipts page.
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button asChild>
+                <Link href="/receipts">Open receipts</Link>
+              </Button>
+              <Button variant="outline" asChild>
+                <Link href="/insights">Open summary</Link>
+              </Button>
+            </div>
+          </div>
         </section>
       </div>
     </main>
@@ -1109,12 +1289,12 @@ function AnimatedReceiptLoader({
 }) {
   return (
     <div className="grid gap-4 rounded-3xl border bg-muted/35 p-4 md:grid-cols-[0.85fr_1.15fr]">
-      <div className="relative overflow-hidden rounded-[1.5rem] border bg-card p-4">
+      <div className="relative overflow-hidden rounded-[1.5rem] border bg-linear-to-br from-card to-amber-50/40 p-4">
         <div className="receipt-scan-line absolute inset-x-0 top-0 h-16" />
-        <div className="receipt-float flex h-full flex-col gap-3 rounded-[1.2rem] border border-dashed bg-muted/35 p-4">
+        <div className="receipt-float flex h-full flex-col gap-3 rounded-[1.2rem] border border-dashed border-primary/20 bg-muted/35 p-4">
           <div className="flex items-center justify-between">
             <div className="text-xs tracking-[0.18em] text-muted-foreground uppercase">
-              Receipt scan
+              Reading receipt
             </div>
             <LoaderCircle className="size-4 animate-spin text-primary" />
           </div>
@@ -1126,7 +1306,7 @@ function AnimatedReceiptLoader({
             {[52, 84, 68, 91].map((width, index) => (
               <div
                 key={width}
-                className="flex items-center justify-between rounded-2xl bg-muted/60 px-3 py-2"
+                className="flex items-center justify-between rounded-2xl bg-linear-to-r from-muted/80 to-amber-50/55 px-3 py-2"
                 style={{ animationDelay: `${index * 120}ms` }}
               >
                 <div
@@ -1144,7 +1324,7 @@ function AnimatedReceiptLoader({
           <CheckCircle2 className="size-4 text-primary" />
           {statusMessage}
         </div>
-        <div className="rounded-2xl bg-muted/70 p-3 text-sm text-muted-foreground">
+        <div className="rounded-2xl bg-linear-to-r from-amber-500/10 via-background to-emerald-500/10 p-3 text-sm text-muted-foreground">
           {activeHighlight}
         </div>
         <div className="grid gap-2">
@@ -1163,7 +1343,7 @@ function AnimatedReceiptLoader({
           ))}
         </div>
         <div className="text-xs tracking-[0.18em] text-muted-foreground uppercase">
-          Live progress {progress}%
+          Progress {progress}%
         </div>
       </div>
     </div>
@@ -1211,24 +1391,6 @@ function SignalTile({
         {label}
       </div>
       <div className="mt-2 text-sm text-foreground break-words">{value}</div>
-    </div>
-  )
-}
-
-function InfoPair({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-1 rounded-2xl border bg-muted/30 p-4">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <span className="text-sm font-semibold">{value}</span>
-    </div>
-  )
-}
-
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border bg-background p-4">
-      <div className="text-sm text-muted-foreground">{label}</div>
-      <div className="mt-2 text-2xl font-semibold">{value}</div>
     </div>
   )
 }

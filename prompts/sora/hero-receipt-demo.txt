@@ -1,0 +1,12 @@
+Use case: website hero section loop for a receipt automation product
+Primary request: show a paper receipt being scanned and transformed into a clean expense table interface
+Scene/background: minimal product-demo environment with a soft off-white to warm gray gradient background, subtle depth, no real desk, no people
+Subject: one centered receipt card on the left and one clean rounded dashboard table card on the right
+Action: beat 1 (0-2s) the receipt floats gently while a teal scan line travels from top to bottom; beat 2 (2-4s) key receipt details convert into neat rows and columns inside the table card, with category pills and amount cells appearing in sequence
+Camera: straight-on product shot, locked-off framing, very subtle push-in, no rotation
+Lighting/mood: polished SaaS hero animation, soft studio light, calm and confident
+Color palette: off-white, warm gray, charcoal, teal, soft mint
+Style/format: premium motion design, crisp UI mockup, clean vector-like surfaces, subtle 3D depth, designed for a seamless website loop
+Timing/beats: smooth 4 second loop; motion should feel readable and deliberate; final frame should closely match the opening composition for looping
+Constraints: no people; no hands; no logos; no browser chrome; no phone frame; keep the interface simple and legible; use short believable pseudo-UI labels only if needed; emphasize the transformation from raw receipt to structured accounting table
+Avoid: flicker, jitter, fast motion, messy typography, crowded interface, dramatic camera moves, photoreal human elements
