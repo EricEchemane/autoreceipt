@@ -97,6 +97,12 @@ type UploadQueueItem = {
   storedReceipt: StoredReceipt | null
 }
 
+type LimitPromptState = {
+  used: number
+  limit: number
+  plan: string
+} | null
+
 type ParsedSseEvent = {
   event: string
   data: unknown
@@ -260,6 +266,7 @@ export function ReceiptPrototype() {
   const [queueItems, setQueueItems] = useState<UploadQueueItem[]>([])
   const [focusedUploadId, setFocusedUploadId] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState("")
+  const [limitPrompt, setLimitPrompt] = useState<LimitPromptState>(null)
   const [isLoadingReceipts, setIsLoadingReceipts] = useState(true)
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false)
   const recentReceiptsRef = useRef<HTMLElement | null>(null)
@@ -268,7 +275,22 @@ export function ReceiptPrototype() {
     async function loadReceipts() {
       try {
         const response = await fetch("/api/receipts")
-        const payload = (await response.json()) as { receipts?: StoredReceipt[] }
+
+        if (response.status === 401) {
+          setReceipts([])
+          setSelectedRecentReceiptId(null)
+          return
+        }
+
+        const payload = (await response.json()) as {
+          receipts?: StoredReceipt[]
+          error?: string
+        }
+
+        if (!response.ok) {
+          throw new Error(payload.error ?? "Could not load saved receipts.")
+        }
+
         const nextReceipts = payload.receipts ?? []
 
         setReceipts(nextReceipts)
@@ -434,7 +456,28 @@ export function ReceiptPrototype() {
         let message = "Receipt extraction failed."
 
         try {
-          const errorPayload = (await response.json()) as { error?: string }
+          const errorPayload = (await response.json()) as {
+            error?: string
+            code?: string
+            usage?: {
+              used?: number
+              limit?: number
+              plan?: string
+            }
+          }
+
+          if (
+            errorPayload.code === "MONTHLY_LIMIT_REACHED" &&
+            errorPayload.usage?.used !== undefined &&
+            errorPayload.usage?.limit !== undefined
+          ) {
+            setLimitPrompt({
+              used: errorPayload.usage.used,
+              limit: errorPayload.usage.limit,
+              plan: errorPayload.usage.plan ?? "free",
+            })
+          }
+
           if (errorPayload.error) {
             message = errorPayload.error
           }
@@ -779,6 +822,30 @@ export function ReceiptPrototype() {
                         Up to {MAX_PARALLEL_UPLOADS} receipts processed at once
                       </span>
                     </div>
+
+                    {limitPrompt ? (
+                      <div className="rounded-2xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm">
+                        <p className="font-medium text-foreground">
+                          Monthly limit reached
+                        </p>
+                        <p className="mt-1 text-muted-foreground">
+                          You have used {limitPrompt.used} of {limitPrompt.limit} receipts on your{" "}
+                          {limitPrompt.plan} plan this month.
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button size="sm" asChild>
+                            <Link href="/billing">Upgrade plan</Link>
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setLimitPrompt(null)}
+                          >
+                            Dismiss
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="flex flex-wrap justify-between gap-2 sm:gap-3">
                     <Button

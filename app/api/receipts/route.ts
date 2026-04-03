@@ -1,5 +1,6 @@
 import { z } from "zod"
 
+import { getServerSession } from "@/lib/auth-session"
 import { bulkUpdateReceipts, listReceipts } from "@/lib/receipt-store"
 
 export const runtime = "nodejs"
@@ -13,12 +14,24 @@ const patchSchema = z.object({
 })
 
 export async function GET() {
+  const session = await getServerSession()
+
+  if (!session?.user) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
   const receipts = await listReceipts()
 
   return Response.json({ receipts })
 }
 
 export async function PATCH(request: Request) {
+  const session = await getServerSession()
+
+  if (!session?.user) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
   let payload: unknown
 
   try {

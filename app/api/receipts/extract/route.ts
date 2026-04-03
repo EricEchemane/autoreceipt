@@ -1,9 +1,11 @@
 import { zodTextFormat } from "openai/helpers/zod"
 import OpenAI from "openai"
 
+import { getServerSession } from "@/lib/auth-session"
 import { getOpenAIClient } from "@/lib/openai"
 import { receiptSchema } from "@/lib/receipt-schema"
 import { persistReceipt } from "@/lib/receipt-store"
+import { consumeMonthlyReceiptQuota } from "@/lib/usage"
 
 export const runtime = "nodejs"
 
@@ -68,6 +70,12 @@ function buildReceiptInput(file: File, base64: string) {
 }
 
 export async function POST(request: Request) {
+  const session = await getServerSession()
+
+  if (!session?.user) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
   let formData: FormData
 
   try {
@@ -85,6 +93,24 @@ export async function POST(request: Request) {
     return Response.json(
       { error: "Receipt file is required." },
       { status: 400 }
+    )
+  }
+
+  const quota = await consumeMonthlyReceiptQuota(session.user.id)
+
+  if (!quota.allowed) {
+    return Response.json(
+      {
+        code: "MONTHLY_LIMIT_REACHED",
+        error: `You've reached your monthly receipt limit (${quota.limit}). Upgrade to continue processing receipts.`,
+        usage: {
+          used: quota.used,
+          limit: quota.limit,
+          remaining: quota.remaining,
+          plan: quota.plan,
+        },
+      },
+      { status: 402 }
     )
   }
 

@@ -1,6 +1,8 @@
 import type { Metadata } from "next"
+import { redirect } from "next/navigation"
 
 import { ReceiptsWorkspace } from "@/components/receipts-workspace"
+import { getServerSession } from "@/lib/auth-session"
 
 export const metadata: Metadata = {
   title: "Receipts",
@@ -8,6 +10,12 @@ export const metadata: Metadata = {
     "Browse saved receipts, review extracted data, and keep records organized.",
 }
 
-export default function ReceiptsPage() {
+export default async function ReceiptsPage() {
+  const session = await getServerSession()
+
+  if (!session?.user) {
+    redirect("/sign-in")
+  }
+
   return <ReceiptsWorkspace />
 }
