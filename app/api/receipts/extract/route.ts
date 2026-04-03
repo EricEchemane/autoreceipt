@@ -170,7 +170,7 @@ export async function POST(request: Request) {
 
         const finalResponse = await response.finalResponse()
         const parsedReceipt = receiptSchema.parse(finalResponse.output_parsed)
-        const storedReceipt = await persistReceipt({
+        const persistedReceipt = await persistReceipt({
           sourceFileName: fileEntry.name,
           sourceMimeType: inferMimeType(fileEntry),
           fileBuffer,
@@ -178,7 +178,8 @@ export async function POST(request: Request) {
         })
 
         send("receipt", {
-          receipt: storedReceipt,
+          receipt: persistedReceipt.receipt,
+          duplicate: persistedReceipt.duplicate,
           progress: 100,
         })
         send("done", { ok: true })

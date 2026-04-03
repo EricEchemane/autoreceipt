@@ -26,6 +26,7 @@ export const storedReceiptSchema = receiptSchema.extend({
   sourceFileName: z.string(),
   sourceFileUrl: z.string(),
   sourceMimeType: z.string(),
+  sourceFileHash: z.string().optional(),
   createdAt: z.string(),
   reviewStatus: z.enum(["new", "reviewed", "posted", "archived"]).default("new"),
 })
