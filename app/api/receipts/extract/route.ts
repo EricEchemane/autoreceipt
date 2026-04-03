@@ -1,7 +1,9 @@
 import { zodTextFormat } from "openai/helpers/zod"
 import OpenAI from "openai"
+import { cookies } from "next/headers"
 
 import { getServerSession } from "@/lib/auth-session"
+import { getGuestMonthlyUsage, incrementGuestMonthlyUsage } from "@/lib/guest-usage"
 import { getOpenAIClient } from "@/lib/openai"
 import { receiptSchema } from "@/lib/receipt-schema"
 import { persistReceipt } from "@/lib/receipt-store"
@@ -71,10 +73,8 @@ function buildReceiptInput(file: File, base64: string) {
 
 export async function POST(request: Request) {
   const session = await getServerSession()
-
-  if (!session?.user) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 })
-  }
+  const cookieStore = await cookies()
+  const signedInUserId = session?.user?.id ?? null
 
   let formData: FormData
 
@@ -96,22 +96,50 @@ export async function POST(request: Request) {
     )
   }
 
-  const quota = await consumeMonthlyReceiptQuota(session.user.id)
+  let guestId = cookieStore.get("ar_guest_id")?.value ?? ""
+  let shouldSetGuestCookie = false
 
-  if (!quota.allowed) {
-    return Response.json(
-      {
-        code: "MONTHLY_LIMIT_REACHED",
-        error: `You've reached your monthly receipt limit (${quota.limit}). Upgrade to continue processing receipts.`,
-        usage: {
-          used: quota.used,
-          limit: quota.limit,
-          remaining: quota.remaining,
-          plan: quota.plan,
+  if (!signedInUserId && !guestId) {
+    guestId = crypto.randomUUID()
+    shouldSetGuestCookie = true
+  }
+
+  if (signedInUserId) {
+    const quota = await consumeMonthlyReceiptQuota(signedInUserId)
+
+    if (!quota.allowed) {
+      return Response.json(
+        {
+          code: "MONTHLY_LIMIT_REACHED",
+          error: `You've reached your monthly receipt limit (${quota.limit}). Upgrade to continue processing receipts.`,
+          usage: {
+            used: quota.used,
+            limit: quota.limit,
+            remaining: quota.remaining,
+            plan: quota.plan,
+          },
         },
-      },
-      { status: 402 }
-    )
+        { status: 402 }
+      )
+    }
+  } else {
+    const guestUsage = await getGuestMonthlyUsage(guestId)
+
+    if (guestUsage.used >= guestUsage.limit) {
+      return Response.json(
+        {
+          code: "GUEST_LIMIT_REACHED",
+          error: `You've used all ${guestUsage.limit} free receipt scans. Create an account to continue.`,
+          usage: {
+            used: guestUsage.used,
+            limit: guestUsage.limit,
+            remaining: guestUsage.remaining,
+            plan: "guest",
+          },
+        },
+        { status: 402 }
+      )
+    }
   }
 
   let client: OpenAI
@@ -196,16 +224,34 @@ export async function POST(request: Request) {
 
         const finalResponse = await response.finalResponse()
         const parsedReceipt = receiptSchema.parse(finalResponse.output_parsed)
-        const persistedReceipt = await persistReceipt({
-          sourceFileName: fileEntry.name,
-          sourceMimeType: inferMimeType(fileEntry),
-          fileBuffer,
-          extractedReceipt: parsedReceipt,
-        })
+        const nextReceipt = signedInUserId
+          ? await persistReceipt({
+              userId: signedInUserId,
+              sourceFileName: fileEntry.name,
+              sourceMimeType: inferMimeType(fileEntry),
+              fileBuffer,
+              extractedReceipt: parsedReceipt,
+            })
+          : {
+              receipt: {
+                id: crypto.randomUUID(),
+                sourceFileName: fileEntry.name,
+                sourceFileUrl: "",
+                sourceMimeType: inferMimeType(fileEntry),
+                createdAt: new Date().toISOString(),
+                reviewStatus: "new" as const,
+                ...parsedReceipt,
+              },
+              duplicate: false as const,
+            }
+
+        if (!signedInUserId) {
+          await incrementGuestMonthlyUsage(guestId)
+        }
 
         send("receipt", {
-          receipt: persistedReceipt.receipt,
-          duplicate: persistedReceipt.duplicate,
+          receipt: nextReceipt.receipt,
+          duplicate: nextReceipt.duplicate,
           progress: 100,
         })
         send("done", { ok: true })
@@ -225,11 +271,18 @@ export async function POST(request: Request) {
     },
   })
 
-  return new Response(stream, {
-    headers: {
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "Content-Type": "text/event-stream; charset=utf-8",
-    },
+  const responseHeaders = new Headers({
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "Content-Type": "text/event-stream; charset=utf-8",
   })
+
+  if (shouldSetGuestCookie) {
+    responseHeaders.append(
+      "Set-Cookie",
+      `ar_guest_id=${guestId}; Path=/; Max-Age=15552000; HttpOnly; SameSite=Lax${process.env.NODE_ENV === "production" ? "; Secure" : ""}`
+    )
+  }
+
+  return new Response(stream, { headers: responseHeaders })
 }

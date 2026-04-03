@@ -1,11 +1,14 @@
 import {
   boolean,
+  doublePrecision,
   integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core"
+import { sql } from "drizzle-orm"
 
 export const users = pgTable(
   "user",
@@ -140,6 +143,57 @@ export const usageMeterMonthly = pgTable(
       .defaultNow(),
   },
   (table) => [uniqueIndex("usage_meter_monthly_user_month_unique").on(table.userId, table.monthKey)]
+)
+
+export const receipts = pgTable(
+  "receipt",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sourceFileName: text("source_file_name").notNull(),
+    sourceFileUrl: text("source_file_url").notNull(),
+    sourceMimeType: text("source_mime_type").notNull(),
+    sourceFileHash: text("source_file_hash").notNull(),
+    receiptFingerprint: text("receipt_fingerprint"),
+    merchantName: text("merchant_name").notNull(),
+    tinNumber: text("tin_number").notNull(),
+    officialReceiptNumber: text("official_receipt_number").notNull(),
+    totalAmountDue: doublePrecision("total_amount_due").notNull(),
+    taxableSales: doublePrecision("taxable_sales").notNull(),
+    vatAmount: doublePrecision("vat_amount").notNull(),
+    confidence: integer("confidence").notNull(),
+    purchaseDate: text("purchase_date").notNull(),
+    notes: text("notes").notNull(),
+    items: jsonb("items")
+      .$type<
+        Array<{
+          description: string
+          quantity: number
+          price: number
+          category: string
+          taxableSales: number
+        }>
+      >()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    reviewStatus: text("review_status").notNull().default("new"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("receipt_id_user_unique").on(table.userId, table.id),
+    uniqueIndex("receipt_user_hash_unique").on(table.userId, table.sourceFileHash),
+    uniqueIndex("receipt_user_fingerprint_unique").on(
+      table.userId,
+      table.receiptFingerprint
+    ),
+  ]
 )
 
 export type AuthUser = typeof users.$inferSelect

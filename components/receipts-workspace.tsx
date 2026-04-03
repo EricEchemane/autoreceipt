@@ -419,7 +419,8 @@ export function ReceiptsWorkspace() {
                     <TableHead className="w-12">Pick</TableHead>
                     <TableHead>Merchant</TableHead>
                     <TableHead>Date</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead className="text-right">Total amount due</TableHead>
+                    <TableHead className="text-right">VAT</TableHead>
                     <TableHead>Category</TableHead>
                     <TableHead>Stage</TableHead>
                     <TableHead>Duplicate</TableHead>
@@ -448,6 +449,9 @@ export function ReceiptsWorkspace() {
                       <TableCell>{formatDate(receipt.createdAt)}</TableCell>
                       <TableCell className="text-right">
                         {formatCurrency(receipt.totalAmountDue)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {formatCurrency(receipt.vatAmount)}
                       </TableCell>
                       <TableCell>{mainCategory(receipt)}</TableCell>
                       <TableCell>

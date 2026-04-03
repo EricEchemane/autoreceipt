@@ -20,7 +20,7 @@ export async function GET() {
     return Response.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const receipts = await listReceipts()
+  const receipts = await listReceipts(session.user.id)
 
   return Response.json({ receipts })
 }
@@ -56,8 +56,11 @@ export async function PATCH(request: Request) {
     )
   }
 
-  await bulkUpdateReceipts(parsed.data)
-  const receipts = await listReceipts()
+  await bulkUpdateReceipts({
+    ...parsed.data,
+    userId: session.user.id,
+  })
+  const receipts = await listReceipts(session.user.id)
 
   return Response.json({ receipts })
 }
