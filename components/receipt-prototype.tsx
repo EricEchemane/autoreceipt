@@ -1,16 +1,14 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useMemo, useRef, useState, useTransition } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowUpRight,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  ExternalLink,
   FileSearch,
   Files,
-  ImageUp,
   LoaderCircle,
   ScanSearch,
   ShieldCheck,
@@ -31,11 +29,11 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
+import { Separator } from "@/components/ui/separator"
 import {
   Table,
   TableBody,
   TableCell,
-  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
@@ -257,16 +255,14 @@ async function optimizeImageForUpload(file: File) {
 }
 
 export function ReceiptPrototype() {
-  const [receipt, setReceipt] = useState<StoredReceipt | null>(null)
   const [receipts, setReceipts] = useState<StoredReceipt[]>([])
+  const [selectedRecentReceiptId, setSelectedRecentReceiptId] = useState<string | null>(null)
   const [queueItems, setQueueItems] = useState<UploadQueueItem[]>([])
   const [focusedUploadId, setFocusedUploadId] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState("")
   const [isLoadingReceipts, setIsLoadingReceipts] = useState(true)
-  const [highlightReview, setHighlightReview] = useState(false)
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false)
-  const [, startTransition] = useTransition()
-  const savedReceiptsRef = useRef<HTMLElement | null>(null)
+  const recentReceiptsRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     async function loadReceipts() {
@@ -276,7 +272,7 @@ export function ReceiptPrototype() {
         const nextReceipts = payload.receipts ?? []
 
         setReceipts(nextReceipts)
-        setReceipt(nextReceipts[0] ?? null)
+        setSelectedRecentReceiptId(nextReceipts[0]?.id ?? null)
       } catch (error) {
         setErrorMessage(
           error instanceof Error ? error.message : "Could not load saved receipts."
@@ -288,25 +284,6 @@ export function ReceiptPrototype() {
 
     void loadReceipts()
   }, [])
-
-  useEffect(() => {
-    if (!highlightReview) {
-      return
-    }
-
-    savedReceiptsRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    })
-
-    const timeoutId = window.setTimeout(() => {
-      setHighlightReview(false)
-    }, 1800)
-
-    return () => {
-      window.clearTimeout(timeoutId)
-    }
-  }, [highlightReview])
 
   const focusedUpload = useMemo(() => {
     if (focusedUploadId) {
@@ -323,14 +300,16 @@ export function ReceiptPrototype() {
     )
   }, [focusedUploadId, queueItems])
 
-  const totals = useMemo(
-    () => ({
-      itemCount: receipt?.items.length ?? 0,
-      quantityCount:
-        receipt?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0,
-    }),
-    [receipt]
-  )
+  const selectedRecentReceipt = useMemo(() => {
+    if (selectedRecentReceiptId) {
+      const match = receipts.find((item) => item.id === selectedRecentReceiptId)
+      if (match) {
+        return match
+      }
+    }
+
+    return receipts[0] ?? null
+  }, [receipts, selectedRecentReceiptId])
 
   const batchStats = useMemo(() => {
     const completed = queueItems.filter((item) => item.status === "done").length
@@ -403,6 +382,15 @@ export function ReceiptPrototype() {
     setQueueItems((current) =>
       current.map((item) => (item.id === id ? updater(item) : item))
     )
+  }
+
+  function jumpToRecentReceipts() {
+    window.requestAnimationFrame(() => {
+      recentReceiptsRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      })
+    })
   }
 
   async function processQueueItem(job: UploadQueueItem) {
@@ -523,14 +511,12 @@ export function ReceiptPrototype() {
               : "",
           }))
 
-          startTransition(() => {
-            setReceipt(nextReceipt)
-            setReceipts((current) => [
-              nextReceipt,
-              ...current.filter((savedReceipt) => savedReceipt.id !== nextReceipt.id),
-            ])
-          })
-          setHighlightReview(true)
+          setReceipts((current) => [
+            nextReceipt,
+            ...current.filter((savedReceipt) => savedReceipt.id !== nextReceipt.id),
+          ])
+          setSelectedRecentReceiptId(nextReceipt.id)
+          jumpToRecentReceipts()
         }
 
         if (parsedEvent.event === "done") {
@@ -1027,240 +1013,265 @@ export function ReceiptPrototype() {
           </div>
         </section>
 
-        <section
-          ref={savedReceiptsRef}
-          className={cn(
-            "rounded-3xl",
-            highlightReview && "ring-2 ring-primary/30 ring-offset-2 ring-offset-background"
-          )}
-        >
-          <Card className={cn("border-border transition-shadow", highlightReview && "shadow-lg shadow-primary/10")}>
-            <CardHeader>
-              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-                <div className="flex flex-col gap-1.5">
-                  <CardTitle>Saved receipts</CardTitle>
-                  <CardDescription>
-                    Processed receipt history, ready for follow-up review. Select any row
-                    to drive the snapshot and line-item panels below.
-                  </CardDescription>
-                </div>
+        <section ref={recentReceiptsRef}>
+          <Card className="border-border">
+            <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <CardTitle>Recent receipts</CardTitle>
+                <CardDescription>
+                  Quick view of your latest saved receipts.
+                </CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
                 <Badge variant="outline">
                   {isLoadingReceipts ? "Loading..." : `${receipts.length} saved`}
                 </Badge>
+                <Button size="sm" variant="outline" asChild>
+                  <Link href="/receipts">Open full receipts page</Link>
+                </Button>
               </div>
             </CardHeader>
-            <CardContent className="pt-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Merchant</TableHead>
-                    <TableHead>Source file</TableHead>
-                    <TableHead>Purchase date</TableHead>
-                    <TableHead className="text-right">Total due</TableHead>
-                    <TableHead className="text-right">Saved</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {receipts.length > 0 ? (
-                    receipts.map((savedReceipt) => (
-                      <TableRow
-                        key={savedReceipt.id}
-                        className={cn(
-                          "cursor-pointer",
-                          receipt?.id === savedReceipt.id && "bg-accent/60"
-                        )}
-                        onClick={() => setReceipt(savedReceipt)}
-                      >
-                        <TableCell className="font-medium">
-                          <div className="flex items-center gap-2">
-                            <span>{savedReceipt.merchantName || "Unknown merchant"}</span>
-                            {receipt?.id === savedReceipt.id ? (
-                              <Badge variant="secondary">Selected</Badge>
-                            ) : null}
-                          </div>
-                        </TableCell>
-                        <TableCell>{savedReceipt.sourceFileName}</TableCell>
-                        <TableCell>{savedReceipt.purchaseDate || "Unknown"}</TableCell>
-                        <TableCell className="text-right">
-                          {formatCurrency(savedReceipt.totalAmountDue)}
-                        </TableCell>
-                        <TableCell className="text-right text-muted-foreground">
-                          {new Intl.DateTimeFormat("en-PH", {
-                            dateStyle: "medium",
-                            timeStyle: "short",
-                          }).format(new Date(savedReceipt.createdAt))}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
+            <CardContent className="grid pt-2 lg:grid-cols-[1.2fr_0.8fr]">
+              <div className="overflow-x-auto rounded-2xl border border-r-0 rounded-r-none">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Merchant</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead className="text-right">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {receipts.length > 0 ? (
+                      receipts.slice(0, 6).map((savedReceipt) => (
+                        <TableRow
+                          key={savedReceipt.id}
+                          className={cn(
+                            "cursor-pointer transition-colors",
+                            selectedRecentReceipt?.id === savedReceipt.id && "bg-accent/45"
+                          )}
+                          onClick={() => setSelectedRecentReceiptId(savedReceipt.id)}
+                        >
+                          <TableCell className="font-medium">
+                            {savedReceipt.merchantName || "Unknown merchant"}
+                          </TableCell>
+                          <TableCell>{savedReceipt.purchaseDate || "Unknown"}</TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(savedReceipt.totalAmountDue)}
+                          </TableCell>
+                          <TableCell className="text-right">
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                setReceipt(savedReceipt)
-                              }}
+                              asChild
+                              onClick={(event) => event.stopPropagation()}
                             >
-                              Open
-                            </Button>
-                            <Button size="sm" asChild>
                               <a
                                 href={savedReceipt.sourceFileUrl}
                                 target="_blank"
                                 rel="noreferrer"
                               >
-                                <ExternalLink data-icon="inline-start" />
-                                File
+                                Open file
                               </a>
                             </Button>
-                          </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell
+                          colSpan={4}
+                          className="py-8 text-center text-muted-foreground"
+                        >
+                          No receipts saved yet.
                         </TableCell>
                       </TableRow>
-                    ))
-                  ) : (
-                    <TableRow>
-                      <TableCell
-                        colSpan={6}
-                        className="py-10 text-center text-muted-foreground"
-                      >
-                        No receipts yet. Run your first batch to start building a
-                        searchable receipt history.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div
+                className={cn(
+                  "rounded-2xl border border-l-0 rounded-l-none p-4",
+                  selectedRecentReceipt ? "border-primary/10 bg-accent/45" : "bg-muted/20"
+                )}
+              >
+                {selectedRecentReceipt ? (
+                  <div className="flex flex-col gap-3">
+                    <p className="text-sm font-semibold">
+                      {selectedRecentReceipt.merchantName || "Unknown merchant"}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="secondary">
+                        TIN: {selectedRecentReceipt.tinNumber || "Not found"}
+                      </Badge>
+                      <Badge variant="secondary">
+                        Receipt #: {selectedRecentReceipt.officialReceiptNumber || "Not found"}
+                      </Badge>
+                      <Badge variant="secondary">
+                        VAT: {formatCurrency(selectedRecentReceipt.vatAmount)}
+                      </Badge>
+                    </div>
+                    <div className="rounded-xl border bg-background/85 p-3">
+                      <p className="mb-2 text-xs font-medium text-muted-foreground uppercase">
+                        Line items
+                      </p>
+                      <div className="grid gap-2">
+                        {selectedRecentReceipt.items.slice(0, 4).map((item, index) => (
+                          <div
+                            key={`${item.description}-${index}`}
+                            className="flex items-start justify-between gap-3 text-sm"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate font-medium">{item.description}</p>
+                              <p className="text-xs text-muted-foreground">
+                                Qty {item.quantity} · {item.category || "Uncategorized"}
+                              </p>
+                            </div>
+                            <span className="shrink-0 font-medium">
+                              {formatCurrency(item.price)}
+                            </span>
+                          </div>
+                        ))}
+                        {selectedRecentReceipt.items.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">No line items found.</p>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Select a receipt row to view a quick snapshot.
+                  </p>
+                )}
+              </div>
             </CardContent>
           </Card>
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
-          <Card className="border-border">
+        <section className="mt-6 flex flex-col gap-3 sm:mt-8 lg:mt-10">
+          <Separator />
+          <div className="flex flex-col gap-1">
+            <Badge variant="outline" className="w-fit">
+              Why teams choose AutoReceipt
+            </Badge>
+            <CardTitle className="text-2xl sm:text-3xl">
+              Built for everyday bookkeeping work
+            </CardTitle>
+            <CardDescription>
+              Keep records clean, complete, and ready for posting with less manual effort.
+            </CardDescription>
+          </div>
+        </section>
+
+        <section className="grid gap-3 rounded-2xl border bg-muted/30 p-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-xl border bg-background px-3 py-2 text-sm">
+            Secure file storage
+          </div>
+          <div className="rounded-xl border bg-background px-3 py-2 text-sm">
+            Full receipt history
+          </div>
+          <div className="rounded-xl border bg-background px-3 py-2 text-sm">
+            Duplicate detection
+          </div>
+          <div className="rounded-xl border bg-background px-3 py-2 text-sm">
+            Export-ready records
+          </div>
+        </section>
+
+        <section className="grid gap-6 lg:grid-cols-3">
+          <Card>
             <CardHeader>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <CardTitle>Receipt snapshot</CardTitle>
-                  <CardDescription>
-                    Core fields teams usually check before booking an expense.
-                  </CardDescription>
-                </div>
-                {receipt?.sourceFileName ? (
-                  <Badge variant="outline" className="max-w-full">
-                    {receipt.sourceFileName}
-                  </Badge>
-                ) : null}
-              </div>
+              <Badge variant="secondary" className="w-fit">Step 1</Badge>
+              <CardTitle className="text-xl">Upload receipts</CardTitle>
+              <CardDescription>
+                Add image or PDF receipts in one batch.
+              </CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-col gap-6">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <InfoPair
-                  label="Merchant"
-                  value={receipt?.merchantName || "No saved receipt selected"}
-                />
-                <InfoPair
-                  label="Purchase date"
-                  value={receipt?.purchaseDate || "Not found"}
-                />
-                <InfoPair label="Tax ID / TIN" value={receipt?.tinNumber || "Not found"} />
-                <InfoPair
-                  label="Receipt number"
-                  value={receipt?.officialReceiptNumber || "Not found"}
-                />
-                <InfoPair
-                  label="Taxable amount"
-                  value={formatCurrency(receipt?.taxableSales ?? 0)}
-                />
-                <InfoPair
-                  label="VAT amount"
-                  value={formatCurrency(receipt?.vatAmount ?? 0)}
-                />
+          </Card>
+          <Card>
+            <CardHeader>
+              <Badge variant="secondary" className="w-fit">Step 2</Badge>
+              <CardTitle className="text-xl">Review and confirm</CardTitle>
+              <CardDescription>
+                Check merchant, tax, and line details before posting.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader>
+              <Badge variant="secondary" className="w-fit">Step 3</Badge>
+              <CardTitle className="text-xl">Export and post</CardTitle>
+              <CardDescription>
+                Export clean records and complete bookkeeping faster.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        </section>
+
+        <section className="grid gap-6 lg:grid-cols-[1fr_1fr]">
+          <Card>
+            <CardHeader>
+              <CardTitle>Designed for real teams</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              <div className="rounded-xl border px-3 py-3">
+                <p className="text-sm font-medium">Business owners</p>
+                <p className="text-sm text-muted-foreground">Track expenses without manual entry.</p>
               </div>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <MiniStat label="Line items" value={String(totals.itemCount)} />
-                <MiniStat label="Units" value={String(totals.quantityCount)} />
-                <MiniStat
-                  label="Readability score"
-                  value={`${Math.round(receipt?.confidence ?? 0)}%`}
-                />
+              <div className="rounded-xl border px-3 py-3">
+                <p className="text-sm font-medium">Bookkeepers</p>
+                <p className="text-sm text-muted-foreground">Review and correct receipts quickly.</p>
               </div>
-              <div className="rounded-3xl border bg-muted/30 p-4 text-sm leading-7 text-muted-foreground">
-                {receipt?.notes || "No notes returned."}
+              <div className="rounded-xl border px-3 py-3">
+                <p className="text-sm font-medium">Finance teams</p>
+                <p className="text-sm text-muted-foreground">Maintain clean records for month-end closing.</p>
               </div>
-              {receipt?.sourceFileUrl ? (
-                <div className="flex flex-wrap gap-3">
-                  <Button size="sm" asChild>
-                    <a href={receipt.sourceFileUrl} target="_blank" rel="noreferrer">
-                      <ImageUp data-icon="inline-start" />
-                      View original receipt
-                    </a>
-                  </Button>
-                  <div className="rounded-full bg-muted px-3 py-2 text-xs text-muted-foreground">
-                    Saved from {receipt.sourceFileName}
-                  </div>
-                </div>
-              ) : null}
             </CardContent>
           </Card>
 
-          <Card className="border-border">
+          <Card>
             <CardHeader>
-              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-                <div className="flex flex-col gap-1.5">
-                  <CardTitle>Extracted line items</CardTitle>
-                  <CardDescription>
-                    Review description, quantity, amount, category, and taxable value
-                    per line.
-                  </CardDescription>
-                </div>
-                <Badge variant="secondary">
-                  {receipt?.items.length ?? 0} line items found
-                </Badge>
-              </div>
+              <CardTitle>Common questions</CardTitle>
             </CardHeader>
-            <CardContent className="pt-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Description</TableHead>
-                    <TableHead className="text-right">Qty</TableHead>
-                    <TableHead className="text-right">Price</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead className="text-right">Taxable sales</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(receipt?.items ?? []).map((item, index) => (
-                    <TableRow key={`${item.description}-${index}`}>
-                      <TableCell className="min-w-52 font-medium">
-                        {item.description}
-                      </TableCell>
-                      <TableCell className="text-right">{item.quantity}</TableCell>
-                      <TableCell className="text-right">
-                        {formatCurrency(item.price)}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{item.category}</Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {formatCurrency(item.taxableSales)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-                <TableFooter>
-                  <TableRow>
-                    <TableCell className="font-semibold">Total amount due</TableCell>
-                    <TableCell className="text-right" colSpan={3}>
-                      {totals.quantityCount} total units
-                    </TableCell>
-                    <TableCell className="text-right font-semibold">
-                      {formatCurrency(receipt?.totalAmountDue ?? 0)}
-                    </TableCell>
-                  </TableRow>
-                </TableFooter>
-              </Table>
+            <CardContent className="grid gap-3">
+              <div className="rounded-xl border px-3 py-3">
+                <p className="text-sm font-medium">What files are supported?</p>
+                <p className="text-sm text-muted-foreground">PNG, JPG, WEBP, and PDF receipts.</p>
+              </div>
+              <div className="rounded-xl border px-3 py-3">
+                <p className="text-sm font-medium">Can I fix receipt details?</p>
+                <p className="text-sm text-muted-foreground">Yes. Use the receipts page to review and update records.</p>
+              </div>
+              <div className="rounded-xl border px-3 py-3">
+                <p className="text-sm font-medium">How are duplicates handled?</p>
+                <p className="text-sm text-muted-foreground">Possible duplicates are flagged for quick checking.</p>
+              </div>
             </CardContent>
           </Card>
+        </section>
+
+        <section className="rounded-3xl border bg-card p-6 sm:p-8">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="text-2xl sm:text-3xl">
+                Ready to clean up your receipt workflow?
+              </CardTitle>
+              <CardDescription className="mt-2 text-base">
+                Start with a batch upload, then manage everything from the receipts page.
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button asChild>
+                <Link href="/receipts">Open receipts</Link>
+              </Button>
+              <Button variant="outline" asChild>
+                <Link href="/insights">Open summary</Link>
+              </Button>
+            </div>
+          </div>
         </section>
       </div>
     </main>
@@ -1380,24 +1391,6 @@ function SignalTile({
         {label}
       </div>
       <div className="mt-2 text-sm text-foreground break-words">{value}</div>
-    </div>
-  )
-}
-
-function InfoPair({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-1 rounded-2xl border bg-muted/30 p-4">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <span className="text-sm font-semibold">{value}</span>
-    </div>
-  )
-}
-
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border bg-background p-4">
-      <div className="text-sm text-muted-foreground">{label}</div>
-      <div className="mt-2 text-2xl font-semibold">{value}</div>
     </div>
   )
 }
