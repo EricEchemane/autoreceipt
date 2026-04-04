@@ -145,6 +145,28 @@ export const usageMeterMonthly = pgTable(
   (table) => [uniqueIndex("usage_meter_monthly_user_month_unique").on(table.userId, table.monthKey)]
 )
 
+export const guestUsageMeterMonthly = pgTable(
+  "guest_usage_meter_monthly",
+  {
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    guestId: text("guest_id").notNull(),
+    monthKey: text("month_key").notNull(),
+    processedCount: integer("processed_count").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("guest_usage_meter_monthly_guest_month_unique").on(
+      table.guestId,
+      table.monthKey
+    ),
+  ]
+)
+
 export const receipts = pgTable(
   "receipt",
   {

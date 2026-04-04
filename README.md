@@ -58,8 +58,9 @@ Or use the Billing page buttons in development:
 ## Guest Trial
 
 - Visitors can analyze up to `GUEST_FREE_RECEIPT_LIMIT` receipts without signing in.
-- Guest quota is tracked via an httpOnly guest cookie and `.data/guest-usage.json`.
+- Guest quota is tracked via an httpOnly guest cookie and PostgreSQL (`guest_usage_meter_monthly` table).
 - Set `NEXT_PUBLIC_GUEST_FREE_RECEIPT_LIMIT` to control the hero banner copy.
+- Set `NEXT_PUBLIC_FREE_MONTHLY_RECEIPT_LIMIT` for “free account monthly scans” copy in the limit prompt.
 
 ## Receipt File Storage (Cloudflare R2)
 
@@ -74,4 +75,4 @@ Or use the Billing page buttons in development:
 ## Receipt Metadata Storage
 
 - Signed-in users: extracted receipt records are stored in PostgreSQL (`receipt` table).
-- Guests: trial usage is tracked in `.data/guest-usage.json`.
+- Guests: trial usage is tracked in PostgreSQL (`guest_usage_meter_monthly` table).

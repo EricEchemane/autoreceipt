@@ -1,10 +1,7 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import path from "node:path"
+import { and, eq, sql } from "drizzle-orm"
 
-const dataDirectory = path.join(process.cwd(), ".data")
-const usageStorePath = path.join(dataDirectory, "guest-usage.json")
-
-type GuestUsageStore = Record<string, number>
+import { db } from "@/lib/db"
+import { guestUsageMeterMonthly } from "@/lib/db/schema"
 
 function toMonthKey(date: Date) {
   const year = date.getUTCFullYear()
@@ -12,40 +9,24 @@ function toMonthKey(date: Date) {
   return `${year}-${month}`
 }
 
-function buildUsageKey(guestId: string, monthKey: string) {
-  return `${guestId}:${monthKey}`
-}
-
-async function readUsageStore() {
-  await mkdir(dataDirectory, { recursive: true })
-
-  try {
-    const raw = await readFile(usageStorePath, "utf8")
-    return JSON.parse(raw) as GuestUsageStore
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
-      return {}
-    }
-
-    throw error
-  }
-}
-
-async function writeUsageStore(store: GuestUsageStore) {
-  await mkdir(dataDirectory, { recursive: true })
-  await writeFile(usageStorePath, JSON.stringify(store, null, 2), "utf8")
+function getGuestLimit() {
+  return Number(process.env.GUEST_FREE_RECEIPT_LIMIT) || 5
 }
 
 export async function getGuestMonthlyUsage(guestId: string) {
   const monthKey = toMonthKey(new Date())
-  const key = buildUsageKey(guestId, monthKey)
-  const store = await readUsageStore()
-  const used = store[key] ?? 0
-  const limit = Number(process.env.GUEST_FREE_RECEIPT_LIMIT) || 5
+  const usage = await db.query.guestUsageMeterMonthly.findFirst({
+    where: and(
+      eq(guestUsageMeterMonthly.guestId, guestId),
+      eq(guestUsageMeterMonthly.monthKey, monthKey)
+    ),
+    columns: {
+      processedCount: true,
+    },
+  })
+
+  const used = usage?.processedCount ?? 0
+  const limit = getGuestLimit()
 
   return {
     guestId,
@@ -58,20 +39,21 @@ export async function getGuestMonthlyUsage(guestId: string) {
 
 export async function incrementGuestMonthlyUsage(guestId: string) {
   const monthKey = toMonthKey(new Date())
-  const key = buildUsageKey(guestId, monthKey)
-  const store = await readUsageStore()
-  const next = (store[key] ?? 0) + 1
 
-  store[key] = next
-  await writeUsageStore(store)
+  await db
+    .insert(guestUsageMeterMonthly)
+    .values({
+      guestId,
+      monthKey,
+      processedCount: 1,
+    })
+    .onConflictDoUpdate({
+      target: [guestUsageMeterMonthly.guestId, guestUsageMeterMonthly.monthKey],
+      set: {
+        processedCount: sql`${guestUsageMeterMonthly.processedCount} + 1`,
+        updatedAt: new Date(),
+      },
+    })
 
-  const limit = Number(process.env.GUEST_FREE_RECEIPT_LIMIT) || 5
-
-  return {
-    guestId,
-    monthKey,
-    used: next,
-    limit,
-    remaining: Math.max(limit - next, 0),
-  }
+  return getGuestMonthlyUsage(guestId)
 }

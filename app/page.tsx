@@ -1,6 +1,6 @@
 import type { Metadata } from "next"
 
-import { ReceiptPrototype } from "@/components/receipt-prototype"
+import { HomeDashboard } from "@/components/home-dashboard"
 
 export const metadata: Metadata = {
   title: "AutoReceipt",
@@ -9,5 +9,5 @@ export const metadata: Metadata = {
 }
 
 export default function Page() {
-  return <ReceiptPrototype />
+  return <HomeDashboard />
 }
