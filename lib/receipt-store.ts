@@ -1,51 +1,15 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
 import crypto from "node:crypto"
 import path from "node:path"
 
+import { and, desc, eq, inArray } from "drizzle-orm"
+
+import { db } from "@/lib/db"
+import { receipts } from "@/lib/db/schema"
+import { storeReceiptSourceFile } from "@/lib/receipt-file-storage"
 import type { ReceiptData, StoredReceipt } from "@/lib/receipt-schema"
-import { storedReceiptSchema } from "@/lib/receipt-schema"
-
-const dataDirectory = path.join(process.cwd(), ".data")
-const receiptStorePath = path.join(dataDirectory, "receipts.json")
-const uploadDirectory = path.join(process.cwd(), "public", "uploads", "receipts")
-
-async function ensureDirectories() {
-  await mkdir(dataDirectory, { recursive: true })
-  await mkdir(uploadDirectory, { recursive: true })
-}
-
-async function readReceiptStore() {
-  await ensureDirectories()
-
-  try {
-    const raw = await readFile(receiptStorePath, "utf8")
-    const parsed = JSON.parse(raw) as unknown
-
-    return storedReceiptSchema.array().parse(parsed)
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
-      return []
-    }
-
-    throw error
-  }
-}
-
-async function writeReceiptStore(receipts: StoredReceipt[]) {
-  await ensureDirectories()
-  await writeFile(receiptStorePath, JSON.stringify(receipts, null, 2), "utf8")
-}
 
 function normalizeText(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ")
-}
-
-function normalizeAmount(value: number) {
-  return Math.round(value * 100)
 }
 
 function buildReceiptFingerprint(receipt: ReceiptData | StoredReceipt) {
@@ -57,12 +21,9 @@ function buildReceiptFingerprint(receipt: ReceiptData | StoredReceipt) {
     return null
   }
 
-  return [
-    merchant,
-    officialReceiptNumber,
-    purchaseDate,
-    normalizeAmount(receipt.totalAmountDue),
-  ].join(":")
+  return [merchant, officialReceiptNumber, purchaseDate, receipt.totalAmountDue].join(
+    ":"
+  )
 }
 
 function safeExtensionFromName(fileName: string) {
@@ -75,77 +36,128 @@ function safeExtensionFromName(fileName: string) {
   return extension.replace(/[^a-z0-9.]/g, "") || ".bin"
 }
 
-export async function listReceipts() {
-  const receipts = await readReceiptStore()
+function mapDbReceiptToStoredReceipt(
+  row: typeof receipts.$inferSelect
+): StoredReceipt {
+  return {
+    id: row.id,
+    sourceFileName: row.sourceFileName,
+    sourceFileUrl: row.sourceFileUrl,
+    sourceMimeType: row.sourceMimeType,
+    sourceFileHash: row.sourceFileHash,
+    createdAt: row.createdAt.toISOString(),
+    reviewStatus:
+      row.reviewStatus === "reviewed" ||
+      row.reviewStatus === "posted" ||
+      row.reviewStatus === "archived"
+        ? row.reviewStatus
+        : "new",
+    merchantName: row.merchantName,
+    tinNumber: row.tinNumber,
+    officialReceiptNumber: row.officialReceiptNumber,
+    totalAmountDue: row.totalAmountDue,
+    taxableSales: row.taxableSales,
+    vatAmount: row.vatAmount,
+    confidence: row.confidence,
+    purchaseDate: row.purchaseDate,
+    notes: row.notes,
+    items: row.items ?? [],
+  }
+}
 
-  return receipts.sort(
-    (left, right) =>
-      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
-  )
+export async function listReceipts(userId: string) {
+  const rows = await db.query.receipts.findMany({
+    where: eq(receipts.userId, userId),
+    orderBy: [desc(receipts.createdAt)],
+  })
+
+  return rows.map(mapDbReceiptToStoredReceipt)
 }
 
 export async function persistReceipt(params: {
+  userId: string
   sourceFileName: string
   sourceMimeType: string
   fileBuffer: Buffer
   extractedReceipt: ReceiptData
 }) {
-  await ensureDirectories()
-
-  const receipts = await readReceiptStore()
   const sourceFileHash = crypto
     .createHash("sha256")
     .update(params.fileBuffer)
     .digest("hex")
   const nextFingerprint = buildReceiptFingerprint(params.extractedReceipt)
 
-  const duplicateReceipt = receipts.find((receipt) => {
-    if (receipt.sourceFileHash && receipt.sourceFileHash === sourceFileHash) {
-      return true
-    }
-
-    if (!nextFingerprint) {
-      return false
-    }
-
-    return buildReceiptFingerprint(receipt) === nextFingerprint
+  const duplicateByHash = await db.query.receipts.findFirst({
+    where: and(
+      eq(receipts.userId, params.userId),
+      eq(receipts.sourceFileHash, sourceFileHash)
+    ),
   })
 
-  if (duplicateReceipt) {
+  if (duplicateByHash) {
     return {
-      receipt: duplicateReceipt,
+      receipt: mapDbReceiptToStoredReceipt(duplicateByHash),
       duplicate: true as const,
+    }
+  }
+
+  if (nextFingerprint) {
+    const duplicateByFingerprint = await db.query.receipts.findFirst({
+      where: and(
+        eq(receipts.userId, params.userId),
+        eq(receipts.receiptFingerprint, nextFingerprint)
+      ),
+    })
+
+    if (duplicateByFingerprint) {
+      return {
+        receipt: mapDbReceiptToStoredReceipt(duplicateByFingerprint),
+        duplicate: true as const,
+      }
     }
   }
 
   const id = crypto.randomUUID()
   const extension = safeExtensionFromName(params.sourceFileName)
   const storedFileName = `${id}${extension}`
-  const storedFilePath = path.join(uploadDirectory, storedFileName)
-
-  await writeFile(storedFilePath, params.fileBuffer)
-
-  const storedReceipt: StoredReceipt = {
-    id,
-    sourceFileName: params.sourceFileName,
-    sourceFileUrl: `/uploads/receipts/${storedFileName}`,
+  const { sourceFileUrl } = await storeReceiptSourceFile({
+    fileBuffer: params.fileBuffer,
+    storedFileName,
     sourceMimeType: params.sourceMimeType,
-    sourceFileHash,
-    createdAt: new Date().toISOString(),
-    reviewStatus: "new",
-    ...params.extractedReceipt,
-  }
+  })
 
-  receipts.unshift(storedReceipt)
-  await writeReceiptStore(receipts)
+  const [inserted] = await db
+    .insert(receipts)
+    .values({
+      id,
+      userId: params.userId,
+      sourceFileName: params.sourceFileName,
+      sourceFileUrl,
+      sourceMimeType: params.sourceMimeType,
+      sourceFileHash,
+      receiptFingerprint: nextFingerprint,
+      merchantName: params.extractedReceipt.merchantName,
+      tinNumber: params.extractedReceipt.tinNumber,
+      officialReceiptNumber: params.extractedReceipt.officialReceiptNumber,
+      totalAmountDue: params.extractedReceipt.totalAmountDue,
+      taxableSales: params.extractedReceipt.taxableSales,
+      vatAmount: params.extractedReceipt.vatAmount,
+      confidence: params.extractedReceipt.confidence,
+      purchaseDate: params.extractedReceipt.purchaseDate,
+      notes: params.extractedReceipt.notes,
+      items: params.extractedReceipt.items,
+      reviewStatus: "new",
+    })
+    .returning()
 
   return {
-    receipt: storedReceipt,
+    receipt: mapDbReceiptToStoredReceipt(inserted),
     duplicate: false as const,
   }
 }
 
 export async function bulkUpdateReceipts(params: {
+  userId: string
   ids: string[]
   reviewStatus?: StoredReceipt["reviewStatus"]
   category?: string
@@ -156,28 +168,36 @@ export async function bulkUpdateReceipts(params: {
     return []
   }
 
-  const nextCategory = params.category?.trim()
-  const receipts = await readReceiptStore()
-  const updated: StoredReceipt[] = []
-
-  const nextReceipts = receipts.map((receipt) => {
-    if (!idSet.has(receipt.id)) {
-      return receipt
-    }
-
-    const nextReceipt: StoredReceipt = {
-      ...receipt,
-      reviewStatus: params.reviewStatus ?? receipt.reviewStatus,
-      items: nextCategory
-        ? receipt.items.map((item) => ({ ...item, category: nextCategory }))
-        : receipt.items,
-    }
-
-    updated.push(nextReceipt)
-    return nextReceipt
+  const rows = await db.query.receipts.findMany({
+    where: and(
+      eq(receipts.userId, params.userId),
+      inArray(receipts.id, Array.from(idSet))
+    ),
   })
 
-  await writeReceiptStore(nextReceipts)
+  const nextCategory = params.category?.trim()
+  const updated: StoredReceipt[] = []
+
+  for (const row of rows) {
+    const nextItems = nextCategory
+      ? (row.items ?? []).map((item) => ({ ...item, category: nextCategory }))
+      : (row.items ?? [])
+    const nextReviewStatus = params.reviewStatus ?? row.reviewStatus
+
+    const [nextRow] = await db
+      .update(receipts)
+      .set({
+        reviewStatus: nextReviewStatus,
+        items: nextItems,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(receipts.userId, params.userId), eq(receipts.id, row.id)))
+      .returning()
+
+    if (nextRow) {
+      updated.push(mapDbReceiptToStoredReceipt(nextRow))
+    }
+  }
 
   return updated
 }

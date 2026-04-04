@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1775184901076,
+      "tag": "0000_friendly_colonel_america",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1775185275386,
+      "tag": "0001_cold_scarlet_spider",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1775186819869,
+      "tag": "0002_outstanding_trauma",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1775226666542,
+      "tag": "0003_melodic_roughhouse",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1775226997864,
+      "tag": "0004_sleepy_slipstream",
+      "breakpoints": true
+    }
+  ]
+}

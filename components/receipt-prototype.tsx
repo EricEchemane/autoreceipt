@@ -97,6 +97,13 @@ type UploadQueueItem = {
   storedReceipt: StoredReceipt | null
 }
 
+type LimitPromptState = {
+  used: number
+  limit: number
+  plan: string
+  code: "MONTHLY_LIMIT_REACHED" | "GUEST_LIMIT_REACHED"
+} | null
+
 type ParsedSseEvent = {
   event: string
   data: unknown
@@ -260,6 +267,7 @@ export function ReceiptPrototype() {
   const [queueItems, setQueueItems] = useState<UploadQueueItem[]>([])
   const [focusedUploadId, setFocusedUploadId] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState("")
+  const [limitPrompt, setLimitPrompt] = useState<LimitPromptState>(null)
   const [isLoadingReceipts, setIsLoadingReceipts] = useState(true)
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false)
   const recentReceiptsRef = useRef<HTMLElement | null>(null)
@@ -268,7 +276,22 @@ export function ReceiptPrototype() {
     async function loadReceipts() {
       try {
         const response = await fetch("/api/receipts")
-        const payload = (await response.json()) as { receipts?: StoredReceipt[] }
+
+        if (response.status === 401) {
+          setReceipts([])
+          setSelectedRecentReceiptId(null)
+          return
+        }
+
+        const payload = (await response.json()) as {
+          receipts?: StoredReceipt[]
+          error?: string
+        }
+
+        if (!response.ok) {
+          throw new Error(payload.error ?? "Could not load saved receipts.")
+        }
+
         const nextReceipts = payload.receipts ?? []
 
         setReceipts(nextReceipts)
@@ -375,6 +398,11 @@ export function ReceiptPrototype() {
     return "Upload one or more receipts to start processing."
   }, [batchStats, focusedUpload, isAnalyzing])
 
+  const firstQueueError = useMemo(
+    () => queueItems.find((item) => item.status === "error")?.errorMessage ?? "",
+    [queueItems]
+  )
+
   function updateQueueItem(
     id: string,
     updater: (item: UploadQueueItem) => UploadQueueItem
@@ -434,7 +462,30 @@ export function ReceiptPrototype() {
         let message = "Receipt extraction failed."
 
         try {
-          const errorPayload = (await response.json()) as { error?: string }
+          const errorPayload = (await response.json()) as {
+            error?: string
+            code?: "MONTHLY_LIMIT_REACHED" | "GUEST_LIMIT_REACHED"
+            usage?: {
+              used?: number
+              limit?: number
+              plan?: string
+            }
+          }
+
+          if (
+            (errorPayload.code === "MONTHLY_LIMIT_REACHED" ||
+              errorPayload.code === "GUEST_LIMIT_REACHED") &&
+            errorPayload.usage?.used !== undefined &&
+            errorPayload.usage?.limit !== undefined
+          ) {
+            setLimitPrompt({
+              used: errorPayload.usage.used,
+              limit: errorPayload.usage.limit,
+              plan: errorPayload.usage.plan ?? "free",
+              code: errorPayload.code,
+            })
+          }
+
           if (errorPayload.error) {
             message = errorPayload.error
           }
@@ -580,6 +631,7 @@ export function ReceiptPrototype() {
         progress: 100,
         errorMessage: message,
       }))
+      setErrorMessage(message)
     }
   }
 
@@ -670,6 +722,9 @@ export function ReceiptPrototype() {
                 need faster month-end cleanup. Upload receipts in batch, extract key
                 fields, and review categorized line items before posting to books.
               </CardDescription>
+              <div className="mt-1 w-fit rounded-full border border-primary/30 bg-primary/5 px-3 py-1.5 text-sm text-foreground">
+                Try {Number(process.env.NEXT_PUBLIC_GUEST_FREE_RECEIPT_LIMIT) || 5} receipts free, no sign-up required.
+              </div>
             </div>
           </div>
           <div className="mt-6 grid gap-3 sm:grid-cols-3">
@@ -779,6 +834,45 @@ export function ReceiptPrototype() {
                         Up to {MAX_PARALLEL_UPLOADS} receipts processed at once
                       </span>
                     </div>
+
+                    {errorMessage || firstQueueError ? (
+                      <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                        {errorMessage || firstQueueError}
+                      </div>
+                    ) : null}
+
+                    {limitPrompt ? (
+                      <div className="rounded-2xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm">
+                        <p className="font-medium text-foreground">
+                          {limitPrompt.code === "GUEST_LIMIT_REACHED"
+                            ? "Free trial limit reached"
+                            : "Monthly limit reached"}
+                        </p>
+                        <p className="mt-1 text-muted-foreground">
+                          {limitPrompt.code === "GUEST_LIMIT_REACHED"
+                            ? `You've used all ${limitPrompt.limit} free receipt scans. Create an account to continue.`
+                            : `You have used ${limitPrompt.used} of ${limitPrompt.limit} receipts on your ${limitPrompt.plan} plan this month.`}
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {limitPrompt.code === "GUEST_LIMIT_REACHED" ? (
+                            <Button size="sm" asChild>
+                              <Link href="/sign-up">Create free account</Link>
+                            </Button>
+                          ) : (
+                            <Button size="sm" asChild>
+                              <Link href="/billing">Upgrade plan</Link>
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setLimitPrompt(null)}
+                          >
+                            Dismiss
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="flex flex-wrap justify-between gap-2 sm:gap-3">
                     <Button
@@ -824,7 +918,7 @@ export function ReceiptPrototype() {
                           <span className="text-sm font-medium">
                             {isAnalyzing ? "Working on your receipts" : "Batch ready"}
                           </span>
-                          <span className="text-sm text-muted-foreground break-words">
+                          <span className="text-sm text-muted-foreground wrap-break-word">
                             {statusMessage}
                           </span>
                         </div>
@@ -908,6 +1002,11 @@ export function ReceiptPrototype() {
                           <div className="mt-1 text-xs text-muted-foreground">
                             {formatFileSize(item.fileSize)}
                           </div>
+                          {item.errorMessage ? (
+                            <div className="mt-1 text-xs text-destructive">
+                              {item.errorMessage}
+                            </div>
+                          ) : null}
                           <Progress value={item.progress} className="mt-3 h-1.5" />
                         </div>
                         <div className="flex w-full flex-row items-center justify-between gap-2 sm:w-auto sm:flex-col sm:items-end">
@@ -972,7 +1071,7 @@ export function ReceiptPrototype() {
                         {focusedUpload && isActiveStatus(focusedUpload.status) ? (
                           <div className="receipt-scan-line absolute inset-x-4 top-0 h-20" />
                         ) : null}
-                        <pre className="overflow-x-auto font-mono text-xs leading-6 text-foreground whitespace-pre-wrap break-words">
+                        <pre className="overflow-x-auto font-mono text-xs leading-6 text-foreground whitespace-pre-wrap wrap-break-word">
                           {focusedUpload?.streamedText ||
                             '{\n  "message": "No live update yet."\n}'}
                         </pre>
@@ -1061,20 +1160,26 @@ export function ReceiptPrototype() {
                             {formatCurrency(savedReceipt.totalAmountDue)}
                           </TableCell>
                           <TableCell className="text-right">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              asChild
-                              onClick={(event) => event.stopPropagation()}
-                            >
-                              <a
-                                href={savedReceipt.sourceFileUrl}
-                                target="_blank"
-                                rel="noreferrer"
+                            {savedReceipt.sourceFileUrl ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                asChild
+                                onClick={(event) => event.stopPropagation()}
                               >
-                                Open file
-                              </a>
-                            </Button>
+                                <a
+                                  href={savedReceipt.sourceFileUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Open file
+                                </a>
+                              </Button>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">
+                                Not saved
+                              </span>
+                            )}
                           </TableCell>
                         </TableRow>
                       ))
@@ -1390,7 +1495,7 @@ function SignalTile({
         <Icon className="size-3.5" />
         {label}
       </div>
-      <div className="mt-2 text-sm text-foreground break-words">{value}</div>
+      <div className="mt-2 text-sm text-foreground wrap-break-word">{value}</div>
     </div>
   )
 }
