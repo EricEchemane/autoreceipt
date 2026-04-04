@@ -4,6 +4,7 @@ import "./globals.css"
 import { SiteHeader } from "@/components/site-header"
 import { ThemeProvider } from "@/components/theme-provider"
 import { cn } from "@/lib/utils"
+import { Analytics } from "@vercel/analytics/next"
 
 const appName = "AutoReceipt"
 const appDescription =
@@ -54,6 +55,7 @@ export default function RootLayout({
           <SiteHeader />
           {children}
         </ThemeProvider>
+        <Analytics />
       </body>
     </html>
   )
