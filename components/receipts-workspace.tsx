@@ -106,6 +106,7 @@ export function ReceiptsWorkspace() {
   const [dateRange, setDateRange] = useState<DateRange>("all")
   const [merchantFilter, setMerchantFilter] = useState("all")
   const [sortBy, setSortBy] = useState<SortBy>("newest")
+  const [isFilterOpen, setIsFilterOpen] = useState(false)
 
   useEffect(() => {
     async function loadReceipts() {
@@ -323,76 +324,17 @@ export function ReceiptsWorkspace() {
         </section>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Find receipts</CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-            <div className="xl:col-span-2">
-              <label className="mb-1.5 block text-xs text-muted-foreground">Search</label>
-              <Input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Merchant, TIN, amount, item, file"
-              />
-            </div>
-
-            <FilterSelect
-              label="Stage"
-              value={statusFilter}
-              onChange={(value) => setStatusFilter(value as typeof statusFilter)}
-              options={[
-                { value: "all", label: "All stages" },
-                { value: "new", label: "New" },
-                { value: "reviewed", label: "Reviewed" },
-                { value: "posted", label: "Posted" },
-                { value: "archived", label: "Archived" },
-              ]}
-            />
-
-            <FilterSelect
-              label="Date"
-              value={dateRange}
-              onChange={(value) => setDateRange(value as DateRange)}
-              options={[
-                { value: "all", label: "All time" },
-                { value: "30d", label: "Last 30 days" },
-                { value: "this-month", label: "This month" },
-              ]}
-            />
-
-            <FilterSelect
-              label="Sort"
-              value={sortBy}
-              onChange={(value) => setSortBy(value as SortBy)}
-              options={[
-                { value: "newest", label: "Newest first" },
-                { value: "oldest", label: "Oldest first" },
-                { value: "amount-high", label: "Amount high to low" },
-                { value: "amount-low", label: "Amount low to high" },
-              ]}
-            />
-
-            <div className="md:col-span-2 xl:col-span-5">
-              <FilterSelect
-                label="Merchant"
-                value={merchantFilter}
-                onChange={setMerchantFilter}
-                options={[
-                  { value: "all", label: "All merchants" },
-                  ...merchants.map((merchant) => ({ value: merchant, label: merchant })),
-                ]}
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
           <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-col gap-1">
               <CardTitle>Receipts list</CardTitle>
-              <CardDescription>{selectedIds.length} selected</CardDescription>
+              <CardDescription>
+                {filteredReceipts.length} shown • {selectedIds.length} selected
+              </CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" onClick={() => setIsFilterOpen(true)}>
+                Find & filter
+              </Button>
               <Button size="sm" variant="outline" disabled={isSaving} onClick={() => applyStatus("reviewed")}>
                 Mark reviewed
               </Button>
@@ -486,6 +428,88 @@ export function ReceiptsWorkspace() {
             ) : null}
           </CardContent>
         </Card>
+
+        {isFilterOpen ? (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-background/80 p-4 backdrop-blur-sm sm:items-center">
+            <Card className="max-h-[90svh] w-full max-w-4xl overflow-y-auto">
+              <CardHeader className="flex flex-row items-start justify-between gap-3">
+                <div className="flex flex-col gap-1">
+                  <CardTitle>Find receipts</CardTitle>
+                  <CardDescription>
+                    Filter the list without leaving this page.
+                  </CardDescription>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => setIsFilterOpen(false)}>
+                  Close
+                </Button>
+              </CardHeader>
+              <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                <div className="xl:col-span-2">
+                  <label className="mb-1.5 block text-xs text-muted-foreground">Search</label>
+                  <Input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Merchant, TIN, amount, item, file"
+                  />
+                </div>
+
+                <FilterSelect
+                  label="Stage"
+                  value={statusFilter}
+                  onChange={(value) => setStatusFilter(value as typeof statusFilter)}
+                  options={[
+                    { value: "all", label: "All stages" },
+                    { value: "new", label: "New" },
+                    { value: "reviewed", label: "Reviewed" },
+                    { value: "posted", label: "Posted" },
+                    { value: "archived", label: "Archived" },
+                  ]}
+                />
+
+                <FilterSelect
+                  label="Date"
+                  value={dateRange}
+                  onChange={(value) => setDateRange(value as DateRange)}
+                  options={[
+                    { value: "all", label: "All time" },
+                    { value: "30d", label: "Last 30 days" },
+                    { value: "this-month", label: "This month" },
+                  ]}
+                />
+
+                <FilterSelect
+                  label="Sort"
+                  value={sortBy}
+                  onChange={(value) => setSortBy(value as SortBy)}
+                  options={[
+                    { value: "newest", label: "Newest first" },
+                    { value: "oldest", label: "Oldest first" },
+                    { value: "amount-high", label: "Amount high to low" },
+                    { value: "amount-low", label: "Amount low to high" },
+                  ]}
+                />
+
+                <div className="md:col-span-2 xl:col-span-5">
+                  <FilterSelect
+                    label="Merchant"
+                    value={merchantFilter}
+                    onChange={setMerchantFilter}
+                    options={[
+                      { value: "all", label: "All merchants" },
+                      ...merchants.map((merchant) => ({ value: merchant, label: merchant })),
+                    ]}
+                  />
+                </div>
+
+                <div className="md:col-span-2 xl:col-span-5 flex justify-end">
+                  <Button size="sm" onClick={() => setIsFilterOpen(false)}>
+                    Apply filters
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        ) : null}
       </div>
     </main>
   )
