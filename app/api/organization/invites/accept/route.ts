@@ -3,6 +3,7 @@ import { z } from "zod"
 import { eq } from "drizzle-orm"
 
 import { getServerSession } from "@/lib/auth-session"
+import { ACTIVE_ORGANIZATION_COOKIE } from "@/lib/auth-organization"
 import { db } from "@/lib/db"
 import { billingCustomers } from "@/lib/db/schema"
 import { isBusinessPlan } from "@/lib/billing"
@@ -56,7 +57,16 @@ export async function POST(request: Request) {
       userEmail: session.user.email,
     })
 
-    return NextResponse.json({ invite })
+    const response = NextResponse.json({ invite })
+    response.cookies.set(ACTIVE_ORGANIZATION_COOKIE, pendingInvite.organizationId, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 180,
+    })
+
+    return response
   } catch (error) {
     return NextResponse.json(
       {

@@ -96,10 +96,22 @@ export async function ensureDefaultOrganizationForUser(user: {
 export async function getCurrentOrganizationForUser(user: {
   id: string
   name: string
-}) {
-  const membership = await db.query.organizationMembers.findFirst({
+}, preferredOrganizationId?: string | null) {
+  const memberships = await db.query.organizationMembers.findMany({
     where: eq(organizationMembers.userId, user.id),
+    orderBy: [desc(organizationMembers.createdAt)],
   })
+
+  if (memberships.length === 0) {
+    return ensureDefaultOrganizationForUser(user)
+  }
+
+  const membership =
+    (preferredOrganizationId
+      ? memberships.find(
+          (candidate) => candidate.organizationId === preferredOrganizationId
+        )
+      : undefined) ?? memberships[0]
 
   if (!membership) {
     return ensureDefaultOrganizationForUser(user)
@@ -121,6 +133,20 @@ export async function getCurrentOrganizationForUser(user: {
 
 export async function createOrganizationInviteToken() {
   return crypto.randomUUID()
+}
+
+export async function userHasOrganizationMembership(params: {
+  userId: string
+  organizationId: string
+}) {
+  const membership = await db.query.organizationMembers.findFirst({
+    where: and(
+      eq(organizationMembers.userId, params.userId),
+      eq(organizationMembers.organizationId, params.organizationId)
+    ),
+  })
+
+  return Boolean(membership)
 }
 
 export async function listOrganizationMembers(organizationId: string) {
