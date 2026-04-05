@@ -60,7 +60,8 @@ export async function POST(request: Request) {
 
   const status = mapXenditStatus(event, billing.currentPeriodEnd)
 
-  await upsertBillingCustomer(billing.userId, {
+  await upsertBillingCustomer(billing.organizationId ?? `user-org:${billing.userId}`, {
+    userId: billing.userId,
     provider: "xendit",
     providerCustomerId: providerCustomerId ?? billing.providerCustomerId,
     providerSubscriptionId: providerSubscriptionId ?? billing.providerSubscriptionId,

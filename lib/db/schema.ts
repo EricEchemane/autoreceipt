@@ -97,10 +97,81 @@ export const verifications = pgTable("verification", {
     .defaultNow(),
 })
 
+export const organizations = pgTable(
+  "organization",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [uniqueIndex("organization_slug_unique").on(table.slug)]
+)
+
+export const organizationMembers = pgTable(
+  "organization_member",
+  {
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    role: text("role").notNull().default("owner"),
+    status: text("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("organization_member_org_user_unique").on(
+      table.organizationId,
+      table.userId
+    ),
+  ]
+)
+
+export const organizationInvites = pgTable(
+  "organization_invite",
+  {
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    role: text("role").notNull().default("member"),
+    token: text("token").notNull(),
+    status: text("status").notNull().default("pending"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("organization_invite_token_unique").on(table.token),
+  ]
+)
+
 export const billingCustomers = pgTable(
   "billing_customer",
   {
     id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    organizationId: text("organization_id").references(() => organizations.id, {
+      onDelete: "cascade",
+    }),
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -120,6 +191,7 @@ export const billingCustomers = pgTable(
   },
   (table) => [
     uniqueIndex("billing_customer_user_id_unique").on(table.userId),
+    uniqueIndex("billing_customer_org_id_unique").on(table.organizationId),
     uniqueIndex("billing_customer_provider_customer_unique").on(
       table.providerCustomerId
     ),
@@ -130,6 +202,9 @@ export const usageMeterMonthly = pgTable(
   "usage_meter_monthly",
   {
     id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    organizationId: text("organization_id").references(() => organizations.id, {
+      onDelete: "cascade",
+    }),
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -142,7 +217,16 @@ export const usageMeterMonthly = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (table) => [uniqueIndex("usage_meter_monthly_user_month_unique").on(table.userId, table.monthKey)]
+  (table) => [
+    uniqueIndex("usage_meter_monthly_user_month_unique").on(
+      table.userId,
+      table.monthKey
+    ),
+    uniqueIndex("usage_meter_monthly_org_month_unique").on(
+      table.organizationId,
+      table.monthKey
+    ),
+  ]
 )
 
 export const guestUsageMeterMonthly = pgTable(
@@ -171,9 +255,18 @@ export const receipts = pgTable(
   "receipt",
   {
     id: text("id").primaryKey(),
+    organizationId: text("organization_id").references(() => organizations.id, {
+      onDelete: "cascade",
+    }),
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    reviewedByUserId: text("reviewed_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    postedByUserId: text("posted_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
     sourceFileName: text("source_file_name").notNull(),
     sourceFileUrl: text("source_file_url").notNull(),
     sourceMimeType: text("source_mime_type").notNull(),
@@ -210,12 +303,42 @@ export const receipts = pgTable(
   },
   (table) => [
     uniqueIndex("receipt_id_user_unique").on(table.userId, table.id),
+    uniqueIndex("receipt_id_org_unique").on(table.organizationId, table.id),
     uniqueIndex("receipt_user_hash_unique").on(table.userId, table.sourceFileHash),
+    uniqueIndex("receipt_org_hash_unique").on(
+      table.organizationId,
+      table.sourceFileHash
+    ),
     uniqueIndex("receipt_user_fingerprint_unique").on(
       table.userId,
       table.receiptFingerprint
     ),
+    uniqueIndex("receipt_org_fingerprint_unique").on(
+      table.organizationId,
+      table.receiptFingerprint
+    ),
   ]
 )
+
+export const receiptActivities = pgTable("receipt_activity", {
+  id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  receiptId: text("receipt_id")
+    .notNull()
+    .references(() => receipts.id, { onDelete: "cascade" }),
+  actorUserId: text("actor_user_id").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  action: text("action").notNull(),
+  metadata: jsonb("metadata")
+    .$type<Record<string, unknown>>()
+    .notNull()
+    .default(sql`'{}'::jsonb`),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+})
 
 export type AuthUser = typeof users.$inferSelect

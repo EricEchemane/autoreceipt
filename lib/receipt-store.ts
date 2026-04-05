@@ -4,7 +4,7 @@ import path from "node:path"
 import { and, desc, eq, inArray } from "drizzle-orm"
 
 import { db } from "@/lib/db"
-import { receipts } from "@/lib/db/schema"
+import { receiptActivities, receipts } from "@/lib/db/schema"
 import { storeReceiptSourceFile } from "@/lib/receipt-file-storage"
 import type { ReceiptData, StoredReceipt } from "@/lib/receipt-schema"
 
@@ -65,9 +65,25 @@ function mapDbReceiptToStoredReceipt(
   }
 }
 
-export async function listReceipts(userId: string) {
+async function appendReceiptActivity(params: {
+  organizationId: string
+  receiptId: string
+  actorUserId: string
+  action: string
+  metadata?: Record<string, unknown>
+}) {
+  await db.insert(receiptActivities).values({
+    organizationId: params.organizationId,
+    receiptId: params.receiptId,
+    actorUserId: params.actorUserId,
+    action: params.action,
+    metadata: params.metadata ?? {},
+  })
+}
+
+export async function listReceipts(organizationId: string) {
   const rows = await db.query.receipts.findMany({
-    where: eq(receipts.userId, userId),
+    where: eq(receipts.organizationId, organizationId),
     orderBy: [desc(receipts.createdAt)],
   })
 
@@ -75,6 +91,7 @@ export async function listReceipts(userId: string) {
 }
 
 export async function persistReceipt(params: {
+  organizationId: string
   userId: string
   sourceFileName: string
   sourceMimeType: string
@@ -89,7 +106,7 @@ export async function persistReceipt(params: {
 
   const duplicateByHash = await db.query.receipts.findFirst({
     where: and(
-      eq(receipts.userId, params.userId),
+      eq(receipts.organizationId, params.organizationId),
       eq(receipts.sourceFileHash, sourceFileHash)
     ),
   })
@@ -104,7 +121,7 @@ export async function persistReceipt(params: {
   if (nextFingerprint) {
     const duplicateByFingerprint = await db.query.receipts.findFirst({
       where: and(
-        eq(receipts.userId, params.userId),
+        eq(receipts.organizationId, params.organizationId),
         eq(receipts.receiptFingerprint, nextFingerprint)
       ),
     })
@@ -130,6 +147,7 @@ export async function persistReceipt(params: {
     .insert(receipts)
     .values({
       id,
+      organizationId: params.organizationId,
       userId: params.userId,
       sourceFileName: params.sourceFileName,
       sourceFileUrl,
@@ -150,6 +168,17 @@ export async function persistReceipt(params: {
     })
     .returning()
 
+  await appendReceiptActivity({
+    organizationId: params.organizationId,
+    receiptId: inserted.id,
+    actorUserId: params.userId,
+    action: "receipt.created",
+    metadata: {
+      sourceFileName: params.sourceFileName,
+      duplicate: false,
+    },
+  })
+
   return {
     receipt: mapDbReceiptToStoredReceipt(inserted),
     duplicate: false as const,
@@ -157,6 +186,7 @@ export async function persistReceipt(params: {
 }
 
 export async function bulkUpdateReceipts(params: {
+  organizationId: string
   userId: string
   ids: string[]
   reviewStatus?: StoredReceipt["reviewStatus"]
@@ -170,7 +200,7 @@ export async function bulkUpdateReceipts(params: {
 
   const rows = await db.query.receipts.findMany({
     where: and(
-      eq(receipts.userId, params.userId),
+      eq(receipts.organizationId, params.organizationId),
       inArray(receipts.id, Array.from(idSet))
     ),
   })
@@ -188,13 +218,32 @@ export async function bulkUpdateReceipts(params: {
       .update(receipts)
       .set({
         reviewStatus: nextReviewStatus,
+        reviewedByUserId:
+          nextReviewStatus === "reviewed" ? params.userId : row.reviewedByUserId,
+        postedByUserId:
+          nextReviewStatus === "posted" ? params.userId : row.postedByUserId,
         items: nextItems,
         updatedAt: new Date(),
       })
-      .where(and(eq(receipts.userId, params.userId), eq(receipts.id, row.id)))
+      .where(
+        and(
+          eq(receipts.organizationId, params.organizationId),
+          eq(receipts.id, row.id)
+        )
+      )
       .returning()
 
     if (nextRow) {
+      await appendReceiptActivity({
+        organizationId: params.organizationId,
+        receiptId: nextRow.id,
+        actorUserId: params.userId,
+        action: "receipt.updated",
+        metadata: {
+          reviewStatus: nextReviewStatus,
+          category: nextCategory ?? null,
+        },
+      })
       updated.push(mapDbReceiptToStoredReceipt(nextRow))
     }
   }

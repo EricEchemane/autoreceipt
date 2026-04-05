@@ -2,6 +2,7 @@ import { redirect } from "next/navigation"
 
 import { BillingActions } from "@/components/billing-actions"
 import { BillingUsageSimulator } from "@/components/billing-usage-simulator"
+import { OrganizationInvitesPanel } from "@/components/organization-invites-panel"
 import { Badge } from "@/components/ui/badge"
 import {
   Card,
@@ -10,8 +11,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { getServerSession } from "@/lib/auth-session"
-import { syncBillingStatusForUser } from "@/lib/billing"
+import { getServerOrganizationSession } from "@/lib/auth-organization"
+import { isBusinessPlan, syncBillingStatusForOrganization } from "@/lib/billing"
+import { listOrganizationInvites, listOrganizationMembers } from "@/lib/organization"
 
 function formatBillingStatus(status: string | null | undefined) {
   switch (status) {
@@ -44,20 +46,39 @@ function getBillingStatusHelp(status: string | null | undefined) {
   return null
 }
 
-export default async function BillingPage() {
-  const session = await getServerSession()
+function normalizeCurrentPlan(plan: string | null | undefined) {
+  const lower = (plan ?? "").toLowerCase()
 
-  if (!session?.user) {
+  if (lower.includes("business")) {
+    return "business" as const
+  }
+
+  if (lower.includes("pro")) {
+    return "pro" as const
+  }
+
+  return "free" as const
+}
+
+export default async function BillingPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ plan?: string }>
+}) {
+  const { plan: requestedPlanParam } = await searchParams
+  const { session, organization, membership } = await getServerOrganizationSession()
+
+  if (!session?.user || !organization) {
     redirect("/sign-in")
   }
 
-  let billing = await syncBillingStatusForUser(session.user.id)
+  let billing = await syncBillingStatusForOrganization(organization.id)
 
   if (
     billing?.providerSubscriptionId &&
     (billing.status === "pending" || billing.status === "requires_action")
   ) {
-    billing = await syncBillingStatusForUser(session.user.id)
+    billing = await syncBillingStatusForOrganization(organization.id)
   }
 
   const hasActiveBilling =
@@ -68,8 +89,56 @@ export default async function BillingPage() {
   const canCancelBilling =
     Boolean(billing?.providerCustomerId && billing?.providerSubscriptionId) &&
     (hasActiveBilling || hasPendingBilling)
+  const businessPlanEnabled = isBusinessPlan(billing?.plan)
+  const currentPlan = normalizeCurrentPlan(billing?.plan)
+  const requestedPlan =
+    requestedPlanParam?.toLowerCase() === "business" ? "business" : "pro"
   const statusLabel = formatBillingStatus(billing?.status)
   const statusHelp = getBillingStatusHelp(billing?.status)
+  const [members, invites] = businessPlanEnabled
+    ? await Promise.all([
+        listOrganizationMembers(organization.id),
+        listOrganizationInvites(organization.id),
+      ])
+    : [[], []]
+  const inviteBaseUrl =
+    process.env.NEXT_PUBLIC_APP_URL ??
+    process.env.BETTER_AUTH_URL ??
+    "http://localhost:3000"
+  const primaryCheckoutAction =
+    currentPlan === "pro" && !hasPendingBilling
+      ? {
+          plan: "business" as const,
+          label: "Upgrade to Business",
+          enabled: true,
+        }
+      : currentPlan === "business"
+        ? undefined
+        : requestedPlan === "business"
+          ? {
+              plan: "business" as const,
+              label: "Start Business plan",
+              enabled: !hasActiveBilling && !hasPendingBilling,
+            }
+          : {
+              plan: "pro" as const,
+              label: "Start Pro plan",
+              enabled: !hasActiveBilling && !hasPendingBilling,
+            }
+  const secondaryCheckoutAction =
+    currentPlan === "free"
+      ? requestedPlan === "business"
+        ? {
+            plan: "pro" as const,
+            label: "Start Pro plan",
+            enabled: !hasActiveBilling && !hasPendingBilling,
+          }
+        : {
+            plan: "business" as const,
+            label: "Start Business plan",
+            enabled: !hasActiveBilling && !hasPendingBilling,
+          }
+      : undefined
 
   return (
     <main className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-6 sm:px-6 lg:px-8">
@@ -96,6 +165,14 @@ export default async function BillingPage() {
           <p>
             Account ID:{" "}
             <span className="font-medium text-foreground">{session.user.id}</span>
+          </p>
+          <p>
+            Workspace:{" "}
+            <span className="font-medium text-foreground">{organization.name}</span>
+          </p>
+          <p>
+            Role:{" "}
+            <span className="font-medium text-foreground">{membership?.role ?? "member"}</span>
           </p>
           <p>
             Billing profile:{" "}
@@ -130,7 +207,8 @@ export default async function BillingPage() {
             ) : null}
           </div>
           <BillingActions
-            canStartCheckout={!hasActiveBilling && !hasPendingBilling}
+            primaryCheckoutAction={primaryCheckoutAction}
+            secondaryCheckoutAction={secondaryCheckoutAction}
             canCancelBilling={canCancelBilling}
             canResumeAction={needsAction}
             canRefreshStatus={Boolean(billing?.providerSubscriptionId)}
@@ -138,6 +216,17 @@ export default async function BillingPage() {
           <BillingUsageSimulator devMode={process.env.NODE_ENV !== "production"} />
         </CardContent>
       </Card>
+      {businessPlanEnabled ? (
+        <OrganizationInvitesPanel
+          organizationName={organization.name}
+          canManageInvites={
+            membership?.role === "owner" || membership?.role === "admin"
+          }
+          initialMembers={members}
+          initialInvites={invites}
+          inviteBaseUrl={inviteBaseUrl}
+        />
+      ) : null}
     </main>
   )
 }

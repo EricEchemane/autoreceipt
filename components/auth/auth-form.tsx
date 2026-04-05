@@ -20,9 +20,10 @@ type AuthMode = "sign-in" | "sign-up"
 
 type AuthFormProps = {
   mode: AuthMode
+  callbackUrl?: string
 }
 
-export function AuthForm({ mode }: AuthFormProps) {
+export function AuthForm({ mode, callbackUrl = "/" }: AuthFormProps) {
   const isSignIn = mode === "sign-in"
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
@@ -41,18 +42,18 @@ export function AuthForm({ mode }: AuthFormProps) {
         await authClient.signIn.email({
           email,
           password,
-          callbackURL: "/",
+          callbackURL: callbackUrl,
         })
       } else {
         await authClient.signUp.email({
           name,
           email,
           password,
-          callbackURL: "/",
+          callbackURL: callbackUrl,
         })
       }
 
-      window.location.href = "/"
+      window.location.href = callbackUrl
     } catch (nextError) {
       setError(
         nextError instanceof Error
@@ -71,7 +72,7 @@ export function AuthForm({ mode }: AuthFormProps) {
     try {
       await authClient.signIn.social({
         provider: "google",
-        callbackURL: "/",
+        callbackURL: callbackUrl,
       })
     } catch (nextError) {
       setError(

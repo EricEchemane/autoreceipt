@@ -5,6 +5,7 @@ import { billingCustomers } from "@/lib/db/schema"
 import { createCustomer, getRecurringPlan } from "@/lib/xendit"
 
 type CustomerSeed = {
+  organizationId: string
   userId: string
   email: string
   name: string
@@ -30,7 +31,7 @@ function splitName(name: string) {
 
 export async function getOrCreateBillingCustomer(seed: CustomerSeed) {
   const existing = await db.query.billingCustomers.findFirst({
-    where: eq(billingCustomers.userId, seed.userId),
+    where: eq(billingCustomers.organizationId, seed.organizationId),
   })
 
   if (existing?.providerCustomerId) {
@@ -48,10 +49,12 @@ export async function getOrCreateBillingCustomer(seed: CustomerSeed) {
     email: seed.email,
     metadata: {
       userId: seed.userId,
+      organizationId: seed.organizationId,
     },
   })
 
-  await upsertBillingCustomer(seed.userId, {
+  await upsertBillingCustomer(seed.organizationId, {
+    userId: seed.userId,
     provider: "xendit",
     providerCustomerId: customer.id,
     status: existing?.status ?? "inactive",
@@ -62,6 +65,7 @@ export async function getOrCreateBillingCustomer(seed: CustomerSeed) {
 }
 
 type BillingUpdate = {
+  userId?: string
   provider?: string
   providerCustomerId?: string | null
   providerSubscriptionId?: string | null
@@ -71,12 +75,16 @@ type BillingUpdate = {
   currentPeriodEnd?: Date | null
 }
 
+export function isBusinessPlan(plan: string | null | undefined) {
+  return (plan ?? "").toLowerCase().includes("business")
+}
+
 export async function upsertBillingCustomer(
-  userId: string,
+  organizationId: string,
   update: BillingUpdate
 ) {
   const existing = await db.query.billingCustomers.findFirst({
-    where: eq(billingCustomers.userId, userId),
+    where: eq(billingCustomers.organizationId, organizationId),
   })
 
   if (existing) {
@@ -88,8 +96,13 @@ export async function upsertBillingCustomer(
       })
       .where(eq(billingCustomers.id, existing.id))
   } else {
+    if (!update.userId) {
+      throw new Error("Billing record creation requires a userId.")
+    }
+
     await db.insert(billingCustomers).values({
-      userId,
+      organizationId,
+      userId: update.userId,
       provider: update.provider ?? "xendit",
       providerCustomerId: update.providerCustomerId ?? null,
       providerSubscriptionId: update.providerSubscriptionId ?? null,
@@ -115,9 +128,9 @@ function mapXenditPlanStatus(status: string) {
   }
 }
 
-export async function syncBillingStatusForUser(userId: string) {
+export async function syncBillingStatusForOrganization(organizationId: string) {
   const billing = await db.query.billingCustomers.findFirst({
-    where: eq(billingCustomers.userId, userId),
+    where: eq(billingCustomers.organizationId, organizationId),
   })
 
   if (!billing?.providerSubscriptionId) {
@@ -132,7 +145,8 @@ export async function syncBillingStatusForUser(userId: string) {
       billing.status !== nextStatus ||
       billing.providerCustomerId !== plan.customer_id
     ) {
-      await upsertBillingCustomer(userId, {
+      await upsertBillingCustomer(organizationId, {
+        userId: billing.userId,
         provider: "xendit",
         providerCustomerId: plan.customer_id,
         providerSubscriptionId: plan.id,
@@ -142,7 +156,7 @@ export async function syncBillingStatusForUser(userId: string) {
       })
 
       return db.query.billingCustomers.findFirst({
-        where: eq(billingCustomers.userId, userId),
+        where: eq(billingCustomers.organizationId, organizationId),
       })
     }
   } catch {

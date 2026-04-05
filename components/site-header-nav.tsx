@@ -24,10 +24,15 @@ export function SiteHeaderNav({ signedIn }: { signedIn: boolean }) {
           <Link href="/insights">Insights</Link>
         </Button>
         <Button size="sm" variant="ghost" asChild>
-          <Link href="/billing">Billing</Link>
+          <Link href="/pricing">Pricing</Link>
         </Button>
         {signedIn ? (
-          <SignOutButton />
+          <>
+            <Button size="sm" variant="ghost" asChild>
+              <Link href="/billing">Billing</Link>
+            </Button>
+            <SignOutButton />
+          </>
         ) : (
           <>
             <Button size="sm" variant="outline" asChild>
@@ -64,14 +69,21 @@ export function SiteHeaderNav({ signedIn }: { signedIn: boolean }) {
               </Link>
             </Button>
             <Button variant="ghost" className="justify-start" asChild>
-              <Link href="/billing" onClick={closeMenu}>
-                Billing
+              <Link href="/pricing" onClick={closeMenu}>
+                Pricing
               </Link>
             </Button>
             {signedIn ? (
-              <div className="pt-1">
-                <SignOutButton />
-              </div>
+              <>
+                <Button variant="ghost" className="justify-start" asChild>
+                  <Link href="/billing" onClick={closeMenu}>
+                    Billing
+                  </Link>
+                </Button>
+                <div className="pt-1">
+                  <SignOutButton />
+                </div>
+              </>
             ) : (
               <div className="flex flex-col gap-2 pt-1">
                 <Button variant="outline" className="justify-start" asChild>

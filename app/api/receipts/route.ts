@@ -1,6 +1,6 @@
 import { z } from "zod"
 
-import { getServerSession } from "@/lib/auth-session"
+import { getServerOrganizationSession } from "@/lib/auth-organization"
 import { bulkUpdateReceipts, listReceipts } from "@/lib/receipt-store"
 
 export const runtime = "nodejs"
@@ -14,21 +14,21 @@ const patchSchema = z.object({
 })
 
 export async function GET() {
-  const session = await getServerSession()
+  const { session, organization } = await getServerOrganizationSession()
 
-  if (!session?.user) {
+  if (!session?.user || !organization) {
     return Response.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const receipts = await listReceipts(session.user.id)
+  const receipts = await listReceipts(organization.id)
 
   return Response.json({ receipts })
 }
 
 export async function PATCH(request: Request) {
-  const session = await getServerSession()
+  const { session, organization } = await getServerOrganizationSession()
 
-  if (!session?.user) {
+  if (!session?.user || !organization) {
     return Response.json({ error: "Unauthorized" }, { status: 401 })
   }
 
@@ -58,9 +58,10 @@ export async function PATCH(request: Request) {
 
   await bulkUpdateReceipts({
     ...parsed.data,
+    organizationId: organization.id,
     userId: session.user.id,
   })
-  const receipts = await listReceipts(session.user.id)
+  const receipts = await listReceipts(organization.id)
 
   return Response.json({ receipts })
 }

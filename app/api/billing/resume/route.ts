@@ -1,20 +1,20 @@
 import { NextResponse } from "next/server"
 import { eq } from "drizzle-orm"
 
-import { getServerSession } from "@/lib/auth-session"
+import { getServerOrganizationSession } from "@/lib/auth-organization"
 import { db } from "@/lib/db"
 import { billingCustomers } from "@/lib/db/schema"
 import { getRecurringPlan } from "@/lib/xendit"
 
 export async function POST() {
-  const session = await getServerSession()
+  const { session, organization } = await getServerOrganizationSession()
 
-  if (!session?.user) {
+  if (!session?.user || !organization) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
   const billing = await db.query.billingCustomers.findFirst({
-    where: eq(billingCustomers.userId, session.user.id),
+    where: eq(billingCustomers.organizationId, organization.id),
   })
 
   if (!billing?.providerSubscriptionId) {

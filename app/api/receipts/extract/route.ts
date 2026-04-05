@@ -2,7 +2,7 @@ import { zodTextFormat } from "openai/helpers/zod"
 import OpenAI from "openai"
 import { cookies } from "next/headers"
 
-import { getServerSession } from "@/lib/auth-session"
+import { getServerOrganizationSession } from "@/lib/auth-organization"
 import { getGuestMonthlyUsage, incrementGuestMonthlyUsage } from "@/lib/guest-usage"
 import { getOpenAIClient } from "@/lib/openai"
 import { receiptSchema } from "@/lib/receipt-schema"
@@ -72,7 +72,7 @@ function buildReceiptInput(file: File, base64: string) {
 }
 
 export async function POST(request: Request) {
-  const session = await getServerSession()
+  const { session, organization } = await getServerOrganizationSession()
   const cookieStore = await cookies()
   const signedInUserId = session?.user?.id ?? null
 
@@ -105,7 +105,10 @@ export async function POST(request: Request) {
   }
 
   if (signedInUserId) {
-    const quota = await consumeMonthlyReceiptQuota(signedInUserId)
+    const quota = await consumeMonthlyReceiptQuota({
+      organizationId: organization!.id,
+      userId: signedInUserId,
+    })
 
     if (!quota.allowed) {
       return Response.json(
@@ -226,6 +229,7 @@ export async function POST(request: Request) {
         const parsedReceipt = receiptSchema.parse(finalResponse.output_parsed)
         const nextReceipt = signedInUserId
           ? await persistReceipt({
+              organizationId: organization!.id,
               userId: signedInUserId,
               sourceFileName: fileEntry.name,
               sourceMimeType: inferMimeType(fileEntry),

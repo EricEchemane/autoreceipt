@@ -43,11 +43,11 @@ function resolveLimitForPlan(plan: string | null | undefined) {
   return Number(process.env.FREE_MONTHLY_RECEIPT_LIMIT) || DEFAULT_FREE_MONTHLY_LIMIT
 }
 
-export async function getMonthlyUsage(userId: string) {
+export async function getMonthlyUsage(organizationId: string) {
   const monthKey = toMonthKey(new Date())
 
   const billing = await db.query.billingCustomers.findFirst({
-    where: eq(billingCustomers.userId, userId),
+    where: eq(billingCustomers.organizationId, organizationId),
   })
 
   let usage: { processedCount: number } | undefined
@@ -56,7 +56,7 @@ export async function getMonthlyUsage(userId: string) {
   try {
     usage = await db.query.usageMeterMonthly.findFirst({
       where: and(
-        eq(usageMeterMonthly.userId, userId),
+        eq(usageMeterMonthly.organizationId, organizationId),
         eq(usageMeterMonthly.monthKey, monthKey)
       ),
       columns: {
@@ -85,8 +85,12 @@ export async function getMonthlyUsage(userId: string) {
   }
 }
 
-export async function consumeMonthlyReceiptQuota(userId: string) {
-  const usage = await getMonthlyUsage(userId)
+export async function consumeMonthlyReceiptQuota(params: {
+  organizationId: string
+  userId: string
+}) {
+  const { organizationId, userId } = params
+  const usage = await getMonthlyUsage(organizationId)
 
   if (!usage.trackingEnabled) {
     return {
@@ -108,12 +112,13 @@ export async function consumeMonthlyReceiptQuota(userId: string) {
     await db
       .insert(usageMeterMonthly)
       .values({
+        organizationId,
         userId,
         monthKey: usage.monthKey,
         processedCount: 1,
       })
       .onConflictDoUpdate({
-        target: [usageMeterMonthly.userId, usageMeterMonthly.monthKey],
+        target: [usageMeterMonthly.organizationId, usageMeterMonthly.monthKey],
         set: {
           processedCount: sql`${usageMeterMonthly.processedCount} + 1`,
           updatedAt: new Date(),
@@ -139,8 +144,12 @@ export async function consumeMonthlyReceiptQuota(userId: string) {
   }
 }
 
-export async function forceMonthlyLimitReached(userId: string) {
-  const usage = await getMonthlyUsage(userId)
+export async function forceMonthlyLimitReached(params: {
+  organizationId: string
+  userId: string
+}) {
+  const { organizationId, userId } = params
+  const usage = await getMonthlyUsage(organizationId)
 
   if (!usage.trackingEnabled) {
     throw new Error(
@@ -151,23 +160,28 @@ export async function forceMonthlyLimitReached(userId: string) {
   await db
     .insert(usageMeterMonthly)
     .values({
+      organizationId,
       userId,
       monthKey: usage.monthKey,
       processedCount: usage.limit,
     })
     .onConflictDoUpdate({
-      target: [usageMeterMonthly.userId, usageMeterMonthly.monthKey],
+      target: [usageMeterMonthly.organizationId, usageMeterMonthly.monthKey],
       set: {
         processedCount: usage.limit,
         updatedAt: new Date(),
       },
     })
 
-  return getMonthlyUsage(userId)
+  return getMonthlyUsage(organizationId)
 }
 
-export async function resetMonthlyUsage(userId: string) {
-  const usage = await getMonthlyUsage(userId)
+export async function resetMonthlyUsage(params: {
+  organizationId: string
+  userId: string
+}) {
+  const { organizationId, userId } = params
+  const usage = await getMonthlyUsage(organizationId)
 
   if (!usage.trackingEnabled) {
     throw new Error(
@@ -178,17 +192,18 @@ export async function resetMonthlyUsage(userId: string) {
   await db
     .insert(usageMeterMonthly)
     .values({
+      organizationId,
       userId,
       monthKey: usage.monthKey,
       processedCount: 0,
     })
     .onConflictDoUpdate({
-      target: [usageMeterMonthly.userId, usageMeterMonthly.monthKey],
+      target: [usageMeterMonthly.organizationId, usageMeterMonthly.monthKey],
       set: {
         processedCount: 0,
         updatedAt: new Date(),
       },
     })
 
-  return getMonthlyUsage(userId)
+  return getMonthlyUsage(organizationId)
 }
