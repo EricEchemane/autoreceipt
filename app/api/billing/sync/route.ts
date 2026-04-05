@@ -1,16 +1,16 @@
 import { NextResponse } from "next/server"
 
-import { getServerSession } from "@/lib/auth-session"
-import { syncBillingStatusForUser } from "@/lib/billing"
+import { getServerOrganizationSession } from "@/lib/auth-organization"
+import { syncBillingStatusForOrganization } from "@/lib/billing"
 
 export async function POST() {
-  const session = await getServerSession()
+  const { session, organization } = await getServerOrganizationSession()
 
-  if (!session?.user) {
+  if (!session?.user || !organization) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const billing = await syncBillingStatusForUser(session.user.id)
+  const billing = await syncBillingStatusForOrganization(organization.id)
 
   return NextResponse.json({
     status: billing?.status ?? "inactive",

@@ -43,6 +43,13 @@
       "when": 1775311306187,
       "tag": "0005_lonely_prowler",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1775395200000,
+      "tag": "0006_business_workspaces",
+      "breakpoints": true
     }
   ]
 }

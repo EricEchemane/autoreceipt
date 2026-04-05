@@ -1,21 +1,21 @@
 import { NextResponse } from "next/server"
 import { eq } from "drizzle-orm"
 
-import { getServerSession } from "@/lib/auth-session"
+import { getServerOrganizationSession } from "@/lib/auth-organization"
 import { upsertBillingCustomer } from "@/lib/billing"
 import { db } from "@/lib/db"
 import { billingCustomers } from "@/lib/db/schema"
 import { deactivateRecurringPlan } from "@/lib/xendit"
 
 export async function POST() {
-  const session = await getServerSession()
+  const { session, organization } = await getServerOrganizationSession()
 
-  if (!session?.user) {
+  if (!session?.user || !organization) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
   const billing = await db.query.billingCustomers.findFirst({
-    where: eq(billingCustomers.userId, session.user.id),
+    where: eq(billingCustomers.organizationId, organization.id),
   })
 
   if (!billing?.providerSubscriptionId) {
@@ -33,7 +33,8 @@ export async function POST() {
       billing.currentPeriodEnd instanceof Date &&
       billing.currentPeriodEnd.getTime() > Date.now()
 
-    await upsertBillingCustomer(session.user.id, {
+    await upsertBillingCustomer(organization.id, {
+      userId: billing.userId,
       provider: "xendit",
       providerCustomerId: billing.providerCustomerId,
       providerSubscriptionId: subscription.id,

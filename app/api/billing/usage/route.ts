@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 
-import { getServerSession } from "@/lib/auth-session"
+import { getServerOrganizationSession } from "@/lib/auth-organization"
 import {
   forceMonthlyLimitReached,
   getMonthlyUsage,
@@ -8,14 +8,14 @@ import {
 } from "@/lib/usage"
 
 export async function GET() {
-  const session = await getServerSession()
+  const { session, organization } = await getServerOrganizationSession()
 
-  if (!session?.user) {
+  if (!session?.user || !organization) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
   try {
-    const usage = await getMonthlyUsage(session.user.id)
+    const usage = await getMonthlyUsage(organization.id)
     return NextResponse.json({ usage })
   } catch (error) {
     return NextResponse.json(
@@ -31,9 +31,9 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const session = await getServerSession()
+  const { session, organization } = await getServerOrganizationSession()
 
-  if (!session?.user) {
+  if (!session?.user || !organization) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
@@ -50,7 +50,10 @@ export async function POST(request: Request) {
 
   if (payload?.action === "simulate_limit") {
     try {
-      const usage = await forceMonthlyLimitReached(session.user.id)
+      const usage = await forceMonthlyLimitReached({
+        organizationId: organization.id,
+        userId: session.user.id,
+      })
       return NextResponse.json({ usage })
     } catch (error) {
       return NextResponse.json(
@@ -67,7 +70,10 @@ export async function POST(request: Request) {
 
   if (payload?.action === "reset_usage") {
     try {
-      const usage = await resetMonthlyUsage(session.user.id)
+      const usage = await resetMonthlyUsage({
+        organizationId: organization.id,
+        userId: session.user.id,
+      })
       return NextResponse.json({ usage })
     } catch (error) {
       return NextResponse.json(

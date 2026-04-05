@@ -4,30 +4,46 @@ import { useState } from "react"
 
 import { Button } from "@/components/ui/button"
 
+type CheckoutPlan = "pro" | "business"
+
 type BillingActionsProps = {
-  canStartCheckout: boolean
+  primaryCheckoutAction?: {
+    plan: CheckoutPlan
+    label: string
+    enabled: boolean
+  }
+  secondaryCheckoutAction?: {
+    plan: CheckoutPlan
+    label: string
+    enabled: boolean
+  }
   canCancelBilling: boolean
   canResumeAction: boolean
   canRefreshStatus: boolean
 }
 
 export function BillingActions({
-  canStartCheckout,
+  primaryCheckoutAction,
+  secondaryCheckoutAction,
   canCancelBilling,
   canResumeAction,
   canRefreshStatus,
 }: BillingActionsProps) {
-  const [isCheckoutPending, setIsCheckoutPending] = useState(false)
+  const [pendingCheckoutPlan, setPendingCheckoutPlan] = useState<CheckoutPlan | null>(null)
   const [isCancelPending, setIsCancelPending] = useState(false)
   const [isResumePending, setIsResumePending] = useState(false)
   const [isRefreshPending, setIsRefreshPending] = useState(false)
 
-  async function openCheckout() {
-    setIsCheckoutPending(true)
+  async function openCheckout(plan: CheckoutPlan) {
+    setPendingCheckoutPlan(plan)
 
     try {
       const response = await fetch("/api/billing/checkout", {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ plan }),
       })
       const payload = (await response.json()) as { url?: string; error?: string }
 
@@ -38,7 +54,7 @@ export function BillingActions({
       window.location.href = payload.url
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "Checkout failed.")
-      setIsCheckoutPending(false)
+      setPendingCheckoutPlan(null)
     }
   }
 
@@ -112,12 +128,31 @@ export function BillingActions({
 
   return (
     <div className="flex flex-wrap gap-2">
-      <Button
-        onClick={openCheckout}
-        disabled={isCheckoutPending || !canStartCheckout}
-      >
-        {isCheckoutPending ? "Starting checkout..." : "Start paid plan"}
-      </Button>
+      {primaryCheckoutAction ? (
+        <Button
+          onClick={() => openCheckout(primaryCheckoutAction.plan)}
+          disabled={
+            pendingCheckoutPlan !== null || !primaryCheckoutAction.enabled
+          }
+        >
+          {pendingCheckoutPlan === primaryCheckoutAction.plan
+            ? "Starting checkout..."
+            : primaryCheckoutAction.label}
+        </Button>
+      ) : null}
+      {secondaryCheckoutAction ? (
+        <Button
+          variant="outline"
+          onClick={() => openCheckout(secondaryCheckoutAction.plan)}
+          disabled={
+            pendingCheckoutPlan !== null || !secondaryCheckoutAction.enabled
+          }
+        >
+          {pendingCheckoutPlan === secondaryCheckoutAction.plan
+            ? "Starting checkout..."
+            : secondaryCheckoutAction.label}
+        </Button>
+      ) : null}
       {canResumeAction ? (
         <Button
           variant="outline"

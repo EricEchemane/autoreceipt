@@ -1,20 +1,35 @@
 import { NextResponse } from "next/server"
 import { eq } from "drizzle-orm"
 
+import { getServerOrganizationSession } from "@/lib/auth-organization"
 import { getOrCreateBillingCustomer, upsertBillingCustomer } from "@/lib/billing"
-import { getServerSession } from "@/lib/auth-session"
 import { db } from "@/lib/db"
 import { billingCustomers } from "@/lib/db/schema"
-import { createRecurringPlan } from "@/lib/xendit"
+import { createRecurringPlan, deactivateRecurringPlan } from "@/lib/xendit"
 
-function getPlanConfig() {
-  const amount = Number(process.env.XENDIT_PLAN_AMOUNT)
-  const interval = process.env.XENDIT_PLAN_INTERVAL ?? "MONTH"
-  const intervalCount = Number(process.env.XENDIT_PLAN_INTERVAL_COUNT ?? "1")
-  const totalRecurrenceValue = process.env.XENDIT_PLAN_TOTAL_RECURRENCE
+function getPlanConfig(plan: "pro" | "business") {
+  const envPrefix = plan === "business" ? "XENDIT_BUSINESS" : "XENDIT_PRO"
+  const fallbackToLegacy = plan === "pro"
+
+  const amount = Number(
+    process.env[`${envPrefix}_PLAN_AMOUNT`] ??
+      (fallbackToLegacy ? process.env.XENDIT_PLAN_AMOUNT : undefined)
+  )
+  const interval =
+    process.env[`${envPrefix}_PLAN_INTERVAL`] ??
+    (fallbackToLegacy ? process.env.XENDIT_PLAN_INTERVAL : undefined) ??
+    "MONTH"
+  const intervalCount = Number(
+    process.env[`${envPrefix}_PLAN_INTERVAL_COUNT`] ??
+      (fallbackToLegacy ? process.env.XENDIT_PLAN_INTERVAL_COUNT : undefined) ??
+      "1"
+  )
+  const totalRecurrenceValue =
+    process.env[`${envPrefix}_PLAN_TOTAL_RECURRENCE`] ??
+    (fallbackToLegacy ? process.env.XENDIT_PLAN_TOTAL_RECURRENCE : undefined)
 
   if (!Number.isFinite(amount) || amount <= 0) {
-    throw new Error("XENDIT_PLAN_AMOUNT must be a positive number.")
+    throw new Error(`${envPrefix}_PLAN_AMOUNT must be a positive number.`)
   }
 
   if (!["DAY", "WEEK", "MONTH"].includes(interval)) {
@@ -27,34 +42,61 @@ function getPlanConfig() {
 
   return {
     amount,
-    currency: process.env.XENDIT_PLAN_CURRENCY ?? "PHP",
+    currency:
+      process.env[`${envPrefix}_PLAN_CURRENCY`] ??
+      (fallbackToLegacy ? process.env.XENDIT_PLAN_CURRENCY : undefined) ??
+      "PHP",
     interval: interval as "DAY" | "WEEK" | "MONTH",
     intervalCount,
-    planCode: process.env.XENDIT_PLAN_CODE ?? "pro",
-    planName: process.env.XENDIT_PLAN_NAME ?? "Pro",
+    planCode:
+      process.env[`${envPrefix}_PLAN_CODE`] ??
+      (fallbackToLegacy ? process.env.XENDIT_PLAN_CODE : undefined) ??
+      plan,
+    planName:
+      process.env[`${envPrefix}_PLAN_NAME`] ??
+      (fallbackToLegacy ? process.env.XENDIT_PLAN_NAME : undefined) ??
+      (plan === "business" ? "Business" : "Pro"),
     totalRecurrence: totalRecurrenceValue
       ? Number(totalRecurrenceValue)
       : null,
   }
 }
 
-export async function POST() {
-  const session = await getServerSession()
+function normalizePlan(plan: string | null | undefined) {
+  const lower = (plan ?? "").toLowerCase()
 
-  if (!session?.user) {
+  if (lower.includes("business")) {
+    return "business" as const
+  }
+
+  if (lower.includes("pro")) {
+    return "pro" as const
+  }
+
+  return "free" as const
+}
+
+export async function POST(request: Request) {
+  const { session, organization } = await getServerOrganizationSession()
+
+  if (!session?.user || !organization) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
   try {
+    const payload = (await request.json().catch(() => null)) as
+      | { plan?: "pro" | "business" }
+      | null
+    const requestedPlan = payload?.plan === "business" ? "business" : "pro"
+
     const existingBilling = await db.query.billingCustomers.findFirst({
-      where: eq(billingCustomers.userId, session.user.id),
+      where: eq(billingCustomers.organizationId, organization.id),
     })
+    const currentPlan = normalizePlan(existingBilling?.plan)
 
     if (
       existingBilling &&
-      ["active", "pending", "requires_action", "trialing"].includes(
-        existingBilling.status
-      )
+      ["pending", "requires_action", "trialing"].includes(existingBilling.status)
     ) {
       return NextResponse.json(
         {
@@ -65,8 +107,27 @@ export async function POST() {
       )
     }
 
-    const plan = getPlanConfig()
+    if (existingBilling?.status === "active" && currentPlan === requestedPlan) {
+      return NextResponse.json(
+        {
+          error: `You're already on the ${requestedPlan} plan.`,
+        },
+        { status: 409 }
+      )
+    }
+
+    if (
+      existingBilling?.status === "active" &&
+      currentPlan !== "free" &&
+      currentPlan !== requestedPlan &&
+      existingBilling.providerSubscriptionId
+    ) {
+      await deactivateRecurringPlan(existingBilling.providerSubscriptionId)
+    }
+
+    const plan = getPlanConfig(requestedPlan)
     const customerId = await getOrCreateBillingCustomer({
+      organizationId: organization.id,
       userId: session.user.id,
       email: session.user.email,
       name: session.user.name,
@@ -99,6 +160,7 @@ export async function POST() {
       metadata: {
         userId: session.user.id,
         planCode: plan.planCode,
+        organizationId: organization.id,
       },
       items: [
         {
@@ -111,7 +173,8 @@ export async function POST() {
       ],
     })
 
-    await upsertBillingCustomer(session.user.id, {
+    await upsertBillingCustomer(organization.id, {
+      userId: session.user.id,
       provider: "xendit",
       providerCustomerId: customerId,
       providerSubscriptionId: subscription.id,
