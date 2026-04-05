@@ -4,7 +4,7 @@ import { db } from "@/lib/db"
 import { billingCustomers, usageMeterMonthly } from "@/lib/db/schema"
 
 const DEFAULT_FREE_MONTHLY_LIMIT = 25
-const DEFAULT_TEAM_MONTHLY_LIMIT = 500
+const DEFAULT_PRO_MONTHLY_LIMIT = 500
 const DEFAULT_BUSINESS_MONTHLY_LIMIT = 2000
 
 type PgErrorLike = {
@@ -33,11 +33,14 @@ function resolveLimitForPlan(plan: string | null | undefined) {
   const lowerPlan = (plan ?? "free").toLowerCase()
 
   if (lowerPlan.includes("business")) {
-    return DEFAULT_BUSINESS_MONTHLY_LIMIT
+    return (
+      Number(process.env.BUSINESS_MONTHLY_RECEIPT_LIMIT) ||
+      DEFAULT_BUSINESS_MONTHLY_LIMIT
+    )
   }
 
   if (lowerPlan.includes("team") || lowerPlan.includes("pro")) {
-    return DEFAULT_TEAM_MONTHLY_LIMIT
+    return Number(process.env.PRO_MONTHLY_RECEIPT_LIMIT) || DEFAULT_PRO_MONTHLY_LIMIT
   }
 
   return Number(process.env.FREE_MONTHLY_RECEIPT_LIMIT) || DEFAULT_FREE_MONTHLY_LIMIT

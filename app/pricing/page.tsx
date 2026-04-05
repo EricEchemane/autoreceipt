@@ -28,6 +28,15 @@ export const metadata: Metadata = {
     "Choose the AutoReceipt plan that fits your receipt volume and review workflow.",
 }
 
+const FREE_MONTHLY_RECEIPT_LIMIT =
+  Number(process.env.FREE_MONTHLY_RECEIPT_LIMIT) || 3
+const PRO_MONTHLY_RECEIPT_LIMIT =
+  Number(process.env.PRO_MONTHLY_RECEIPT_LIMIT) || 500
+const BUSINESS_MONTHLY_RECEIPT_LIMIT =
+  Number(process.env.BUSINESS_MONTHLY_RECEIPT_LIMIT) || 2000
+
+const numberFormatter = new Intl.NumberFormat("en-PH")
+
 function formatPlanPrice(params: {
   amount?: string
   currency?: string
@@ -46,6 +55,22 @@ function formatPlanPrice(params: {
   }).format(amount)
 }
 
+function formatReceiptLimit(limit: number, fallback: string) {
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return fallback
+  }
+
+  return `${numberFormatter.format(limit)} receipts / month`
+}
+
+function formatReceiptCount(limit: number, fallback: string) {
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return fallback
+  }
+
+  return numberFormatter.format(limit)
+}
+
 const plans = [
   {
     name: "Free",
@@ -58,13 +83,18 @@ const plans = [
     ctaType: "sign-up" as const,
     variant: "outline" as const,
     features: [
-      "5 guest scans without sign-in",
-      "3 receipts each month after signup",
+      `Up to ${formatReceiptCount(
+        FREE_MONTHLY_RECEIPT_LIMIT,
+        "a starter number of"
+      )} saved receipts each month`,
       "Receipt review workspace",
       "Saved history in your account",
     ],
     specs: {
-      receiptVolume: "3 saved receipts / month",
+      receiptVolume: formatReceiptLimit(
+        FREE_MONTHLY_RECEIPT_LIMIT,
+        "Starter monthly volume"
+      ),
       users: "1 user",
       teamwork: "No shared workspace",
       controls: "Basic review flow",
@@ -82,13 +112,16 @@ const plans = [
     ctaPlan: "pro" as const,
     variant: "default" as const,
     features: [
-      "500 receipts each month",
+      `${formatReceiptCount(PRO_MONTHLY_RECEIPT_LIMIT, "Higher")} receipts each month`,
       "Faster month-end cleanup",
       "Receipt history and file access",
       "Billing and account controls",
     ],
     specs: {
-      receiptVolume: "500 receipts / month",
+      receiptVolume: formatReceiptLimit(
+        PRO_MONTHLY_RECEIPT_LIMIT,
+        "Professional monthly volume"
+      ),
       users: "1 user",
       teamwork: "Personal workspace only",
       controls: "Review, export, and account billing",
@@ -114,7 +147,10 @@ const plans = [
       "Custom plan and usage setup",
     ],
     specs: {
-      receiptVolume: "Custom monthly volume",
+      receiptVolume: formatReceiptLimit(
+        BUSINESS_MONTHLY_RECEIPT_LIMIT,
+        "Business monthly volume"
+      ),
       users: "Multi-user workspace",
       teamwork: "Shared receipt access and member roles",
       controls: "Workspace billing, invites, and team workflows",
@@ -125,15 +161,12 @@ const plans = [
 const comparisonRows = [
   {
     label: "Monthly receipt volume",
-    free: "3 saved",
-    pro: "500",
-    business: "Custom",
-  },
-  {
-    label: "Guest trial",
-    free: "5 scans",
-    pro: "5 scans",
-    business: "5 scans",
+    free: formatReceiptLimit(FREE_MONTHLY_RECEIPT_LIMIT, "Starter monthly volume"),
+    pro: formatReceiptLimit(PRO_MONTHLY_RECEIPT_LIMIT, "Professional monthly volume"),
+    business: formatReceiptLimit(
+      BUSINESS_MONTHLY_RECEIPT_LIMIT,
+      "Business monthly volume"
+    ),
   },
   {
     label: "Saved receipt history",
@@ -188,13 +221,24 @@ function buildPlanHref(params: {
 export default async function PricingPage() {
   const session = await getServerSession()
   const signedIn = Boolean(session?.user)
+  const proPlanPrice = formatPlanPrice({
+    amount: process.env.XENDIT_PRO_PLAN_AMOUNT ?? process.env.XENDIT_PLAN_AMOUNT,
+    currency:
+      process.env.XENDIT_PRO_PLAN_CURRENCY ?? process.env.XENDIT_PLAN_CURRENCY,
+    fallback: "₱499",
+  })
   const businessPlanPrice = formatPlanPrice({
     amount: process.env.XENDIT_BUSINESS_PLAN_AMOUNT,
     currency: process.env.XENDIT_BUSINESS_PLAN_CURRENCY,
     fallback: "Custom",
   })
   const renderedPlans = plans.map((plan) =>
-    plan.name === "Business"
+    plan.name === "Pro"
+      ? {
+          ...plan,
+          price: proPlanPrice,
+        }
+      : plan.name === "Business"
       ? {
           ...plan,
           price: businessPlanPrice,
@@ -214,8 +258,8 @@ export default async function PricingPage() {
             Simple pricing for receipt-heavy bookkeeping work.
           </h1>
           <p className="mt-3 text-base leading-7 text-muted-foreground sm:text-lg">
-            Start free, prove the workflow on real receipts, and upgrade when you
-            need more monthly volume.
+            Start with an account that fits your monthly receipt work and move up
+            when you need more volume or team access.
           </p>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             {signedIn
@@ -386,14 +430,15 @@ export default async function PricingPage() {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-xl font-semibold tracking-tight">
-              Not ready to create an account yet?
+              Ready to set up your receipt workspace?
             </h2>
             <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              You can still try up to 5 receipts on the homepage before signing up.
+              Create an account to save receipts, manage your plan, and keep your
+              records in one place.
             </p>
           </div>
           <Button variant="outline" asChild>
-            <Link href="/">Try the workspace</Link>
+            <Link href={signedIn ? "/billing" : "/sign-up"}>Get started</Link>
           </Button>
         </div>
       </section>

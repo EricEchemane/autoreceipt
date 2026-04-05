@@ -1,4 +1,7 @@
+"use client"
+
 import Link from "next/link"
+import { useMemo, useState } from "react"
 
 import type { StoredReceipt } from "@/lib/receipt-schema"
 import { Badge } from "@/components/ui/badge"
@@ -24,21 +27,26 @@ import { formatCurrency } from "./shared"
 
 type RecentReceiptsSectionProps = {
   receipts: StoredReceipt[]
-  isLoadingReceipts: boolean
-  selectedRecentReceipt: StoredReceipt | null
-  onSelectReceipt: (receiptId: string) => void
-  recentReceiptsRef: React.RefObject<HTMLElement | null>
 }
 
-export function RecentReceiptsSection({
-  receipts,
-  isLoadingReceipts,
-  selectedRecentReceipt,
-  onSelectReceipt,
-  recentReceiptsRef,
-}: RecentReceiptsSectionProps) {
+export function RecentReceiptsSection({ receipts }: RecentReceiptsSectionProps) {
+  const [activeReceiptId, setActiveReceiptId] = useState<string | null>(
+    receipts[0]?.id ?? null
+  )
+
+  const selectedRecentReceipt = useMemo(() => {
+    if (activeReceiptId) {
+      const match = receipts.find((receipt) => receipt.id === activeReceiptId)
+      if (match) {
+        return match
+      }
+    }
+
+    return receipts[0] ?? null
+  }, [activeReceiptId, receipts])
+
   return (
-    <section ref={recentReceiptsRef}>
+    <section id="recent-receipts">
       <Card className="border-border">
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -48,9 +56,7 @@ export function RecentReceiptsSection({
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant="outline">
-              {isLoadingReceipts ? "Loading..." : `${receipts.length} saved`}
-            </Badge>
+            <Badge variant="outline">{`${receipts.length} saved`}</Badge>
             <Button size="sm" variant="outline" asChild>
               <Link href="/receipts">Open full receipts page</Link>
             </Button>
@@ -76,7 +82,7 @@ export function RecentReceiptsSection({
                         "cursor-pointer transition-colors",
                         selectedRecentReceipt?.id === savedReceipt.id && "bg-accent/45"
                       )}
-                      onClick={() => onSelectReceipt(savedReceipt.id)}
+                      onClick={() => setActiveReceiptId(savedReceipt.id)}
                     >
                       <TableCell className="font-medium">
                         {savedReceipt.merchantName || "Unknown merchant"}
@@ -86,26 +92,24 @@ export function RecentReceiptsSection({
                         {formatCurrency(savedReceipt.totalAmountDue)}
                       </TableCell>
                       <TableCell className="text-right">
-                        {savedReceipt.sourceFileUrl ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            asChild
-                            onClick={(event) => event.stopPropagation()}
-                          >
-                            <a
-                              href={savedReceipt.sourceFileUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              Open file
-                            </a>
-                          </Button>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">
-                            Not saved
-                          </span>
-                        )}
+                        <div className="flex justify-end gap-2">
+                          {savedReceipt.sourceFileUrl ? (
+                            <Button size="sm" variant="outline" asChild>
+                              <a
+                                href={savedReceipt.sourceFileUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(event) => event.stopPropagation()}
+                              >
+                                Open file
+                              </a>
+                            </Button>
+                          ) : (
+                            <span className="self-center text-xs text-muted-foreground">
+                              Not saved
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))
@@ -183,4 +187,3 @@ export function RecentReceiptsSection({
     </section>
   )
 }
-
