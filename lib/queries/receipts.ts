@@ -13,6 +13,24 @@ type UpdateReceiptsInput = {
   category?: string
 }
 
+type EditReceiptInput = {
+  id: string
+  merchantName: string
+  tinNumber: string
+  officialReceiptNumber: string
+  purchaseDate: string
+  totalAmountDue: number
+  taxableSales: number
+  vatAmount: number
+  notes: string
+  reviewStatus: StoredReceipt["reviewStatus"]
+  category: string
+}
+
+type EditReceiptResponse = {
+  receipt?: StoredReceipt
+}
+
 export const receiptsQueryKey = ["receipts"] as const
 
 async function fetchReceipts() {
@@ -44,6 +62,33 @@ export function useUpdateReceiptsMutation() {
     mutationFn: updateReceipts,
     onSuccess(receipts) {
       queryClient.setQueryData(receiptsQueryKey, receipts)
+    },
+  })
+}
+
+async function editReceipt({ id, ...input }: EditReceiptInput) {
+  const payload = await fetchJson<EditReceiptResponse>(`/api/receipts/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  })
+
+  if (!payload.receipt) {
+    throw new Error("Could not update receipt.")
+  }
+
+  return payload.receipt
+}
+
+export function useEditReceiptMutation() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: editReceipt,
+    onSuccess(receipt) {
+      queryClient.setQueryData<StoredReceipt[]>(receiptsQueryKey, (current = []) =>
+        current.map((entry) => (entry.id === receipt.id ? receipt : entry))
+      )
     },
   })
 }

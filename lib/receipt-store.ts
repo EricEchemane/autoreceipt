@@ -1,7 +1,7 @@
 import crypto from "node:crypto"
 import path from "node:path"
 
-import { and, desc, eq, inArray } from "drizzle-orm"
+import { and, desc, eq, inArray, ne } from "drizzle-orm"
 
 import { db } from "@/lib/db"
 import { receiptActivities, receipts } from "@/lib/db/schema"
@@ -249,4 +249,115 @@ export async function bulkUpdateReceipts(params: {
   }
 
   return updated
+}
+
+export async function updateReceipt(params: {
+  organizationId: string
+  userId: string
+  id: string
+  merchantName: string
+  tinNumber: string
+  officialReceiptNumber: string
+  purchaseDate: string
+  totalAmountDue: number
+  taxableSales: number
+  vatAmount: number
+  notes: string
+  reviewStatus: StoredReceipt["reviewStatus"]
+  category: string
+}) {
+  const row = await db.query.receipts.findFirst({
+    where: and(
+      eq(receipts.organizationId, params.organizationId),
+      eq(receipts.id, params.id)
+    ),
+  })
+
+  if (!row) {
+    throw new Error("Receipt not found.")
+  }
+
+  const nextItems = (row.items ?? []).map((item) => ({
+    ...item,
+    category: params.category,
+  }))
+
+  const nextFingerprint = buildReceiptFingerprint({
+    ...mapDbReceiptToStoredReceipt(row),
+    merchantName: params.merchantName,
+    officialReceiptNumber: params.officialReceiptNumber,
+    purchaseDate: params.purchaseDate,
+    totalAmountDue: params.totalAmountDue,
+  })
+
+  if (nextFingerprint) {
+    const duplicateReceipt = await db.query.receipts.findFirst({
+      where: and(
+        eq(receipts.organizationId, params.organizationId),
+        eq(receipts.receiptFingerprint, nextFingerprint),
+        ne(receipts.id, params.id)
+      ),
+    })
+
+    if (duplicateReceipt) {
+      throw new Error(
+        "Another saved receipt already matches this merchant, receipt number, date, and amount."
+      )
+    }
+  }
+
+  const [nextRow] = await db
+    .update(receipts)
+    .set({
+      merchantName: params.merchantName,
+      tinNumber: params.tinNumber,
+      officialReceiptNumber: params.officialReceiptNumber,
+      purchaseDate: params.purchaseDate,
+      totalAmountDue: params.totalAmountDue,
+      taxableSales: params.taxableSales,
+      vatAmount: params.vatAmount,
+      notes: params.notes,
+      items: nextItems,
+      reviewStatus: params.reviewStatus,
+      reviewedByUserId:
+        params.reviewStatus === "reviewed" ? params.userId : row.reviewedByUserId,
+      postedByUserId:
+        params.reviewStatus === "posted" ? params.userId : row.postedByUserId,
+      receiptFingerprint: nextFingerprint,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(receipts.organizationId, params.organizationId),
+        eq(receipts.id, params.id)
+      )
+    )
+    .returning()
+
+  if (!nextRow) {
+    throw new Error("Could not update receipt.")
+  }
+
+  await appendReceiptActivity({
+    organizationId: params.organizationId,
+    receiptId: nextRow.id,
+    actorUserId: params.userId,
+    action: "receipt.updated",
+    metadata: {
+      editedFields: [
+        "merchantName",
+        "tinNumber",
+        "officialReceiptNumber",
+        "purchaseDate",
+        "totalAmountDue",
+        "taxableSales",
+        "vatAmount",
+        "notes",
+        "reviewStatus",
+        "category",
+      ],
+    },
+  })
+
+  return mapDbReceiptToStoredReceipt(nextRow)
 }

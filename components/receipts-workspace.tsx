@@ -1,8 +1,8 @@
 "use client"
 
 import Link from "next/link"
-import { CheckCircle2, LoaderCircle } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { CheckCircle2, LoaderCircle, PencilLine, RefreshCw } from "lucide-react"
+import { type ReactNode, useEffect, useMemo, useState } from "react"
 import { utils as xlsxUtils, writeFile as writeXlsxFile } from "xlsx"
 
 import type { StoredReceipt } from "@/lib/receipt-schema"
@@ -34,6 +34,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
+  useEditReceiptMutation,
   useReceiptsQuery,
   useUpdateReceiptsMutation,
 } from "@/lib/queries/receipts"
@@ -43,6 +44,20 @@ type ReviewStatus = StoredReceipt["reviewStatus"]
 type DateRange = "all" | "30d" | "this-month"
 type SortBy = "newest" | "oldest" | "amount-high" | "amount-low"
 type FeedbackTone = "success" | "info"
+type BulkAction = ReviewStatus | null
+const RECEIPTS_PER_PAGE = 10
+type EditReceiptForm = {
+  merchantName: string
+  tinNumber: string
+  officialReceiptNumber: string
+  purchaseDate: string
+  totalAmountDue: string
+  taxableSales: string
+  vatAmount: string
+  reviewStatus: ReviewStatus
+  category: string
+  notes: string
+}
 
 const statusLabel: Record<ReviewStatus, string> = {
   new: "New",
@@ -106,6 +121,10 @@ export function ReceiptsWorkspace() {
   const [errorMessage, setErrorMessage] = useState("")
   const [feedbackMessage, setFeedbackMessage] = useState("")
   const [feedbackTone, setFeedbackTone] = useState<FeedbackTone>("info")
+  const [editingReceiptId, setEditingReceiptId] = useState<string | null>(null)
+  const [editForm, setEditForm] = useState<EditReceiptForm | null>(null)
+  const [editErrorMessage, setEditErrorMessage] = useState("")
+  const [pendingBulkAction, setPendingBulkAction] = useState<BulkAction>(null)
 
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [query, setQuery] = useState("")
@@ -114,13 +133,16 @@ export function ReceiptsWorkspace() {
   const [merchantFilter, setMerchantFilter] = useState("all")
   const [sortBy, setSortBy] = useState<SortBy>("newest")
   const [isFilterOpen, setIsFilterOpen] = useState(false)
+  const [currentPage, setCurrentPage] = useState(1)
 
   const receiptsQuery = useReceiptsQuery()
   const updateReceiptsMutation = useUpdateReceiptsMutation()
+  const editReceiptMutation = useEditReceiptMutation()
   const receipts = receiptsQuery.data ?? emptyReceipts
   const isLoading = receiptsQuery.isLoading
   const isRefreshing = receiptsQuery.isFetching && !isLoading
   const isSaving = updateReceiptsMutation.isPending
+  const isEditSaving = editReceiptMutation.isPending
   const resolvedErrorMessage =
     errorMessage ||
     (receiptsQuery.error instanceof Error
@@ -133,6 +155,8 @@ export function ReceiptsWorkspace() {
     merchantFilter !== "all",
     sortBy !== "newest",
   ].filter(Boolean).length
+  const editingReceipt =
+    receipts.find((receipt) => receipt.id === editingReceiptId) ?? null
 
   useEffect(() => {
     if (!feedbackMessage) {
@@ -147,6 +171,10 @@ export function ReceiptsWorkspace() {
       window.clearTimeout(timeoutId)
     }
   }, [feedbackMessage])
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [query, statusFilter, dateRange, merchantFilter, sortBy])
 
   const merchants = useMemo(
     () =>
@@ -242,6 +270,17 @@ export function ReceiptsWorkspace() {
 
     return { totalSpend, vatTotal, unreviewed, thisMonth }
   }, [filteredReceipts])
+  const totalPages = Math.max(1, Math.ceil(filteredReceipts.length / RECEIPTS_PER_PAGE))
+  const safeCurrentPage = Math.min(currentPage, totalPages)
+  const pageStartIndex = filteredReceipts.length === 0 ? 0 : (safeCurrentPage - 1) * RECEIPTS_PER_PAGE
+  const pageEndIndex = Math.min(pageStartIndex + RECEIPTS_PER_PAGE, filteredReceipts.length)
+  const paginatedReceipts = filteredReceipts.slice(pageStartIndex, pageEndIndex)
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages)
+    }
+  }, [currentPage, totalPages])
 
   async function applyStatus(status: ReviewStatus) {
     if (selectedIds.length === 0) {
@@ -250,6 +289,7 @@ export function ReceiptsWorkspace() {
     }
 
     setErrorMessage("")
+    setPendingBulkAction(status)
 
     try {
       const affectedCount = selectedIds.length
@@ -266,6 +306,8 @@ export function ReceiptsWorkspace() {
       setErrorMessage(
         error instanceof Error ? error.message : "Could not update selected receipts."
       )
+    } finally {
+      setPendingBulkAction(null)
     }
   }
 
@@ -326,6 +368,116 @@ export function ReceiptsWorkspace() {
     )
   }
 
+  function clearAllFilters() {
+    setQuery("")
+    setStatusFilter("all")
+    setDateRange("all")
+    setMerchantFilter("all")
+    setSortBy("newest")
+    setIsFilterOpen(false)
+    setErrorMessage("")
+    setFeedbackTone("info")
+    setFeedbackMessage(`${receipts.length} receipt${receipts.length === 1 ? "" : "s"} shown after clearing filters.`)
+  }
+
+  async function refreshReceipts() {
+    setErrorMessage("")
+    setFeedbackTone("info")
+    setFeedbackMessage("Refreshing receipts...")
+
+    try {
+      const result = await receiptsQuery.refetch()
+
+      if (result.error) {
+        throw result.error
+      }
+
+      const nextReceipts = result.data ?? receipts
+      setFeedbackMessage(
+        `Receipts refreshed. ${nextReceipts.length} receipt${nextReceipts.length === 1 ? "" : "s"} loaded.`
+      )
+    } catch (error) {
+      setFeedbackMessage("")
+      setErrorMessage(
+        error instanceof Error ? error.message : "Could not refresh receipts."
+      )
+    }
+  }
+
+  function openEditDialog(receipt: StoredReceipt) {
+    setEditingReceiptId(receipt.id)
+    setEditForm(buildEditReceiptForm(receipt))
+    setEditErrorMessage("")
+  }
+
+  function closeEditDialog() {
+    if (isEditSaving) {
+      return
+    }
+
+    setEditingReceiptId(null)
+    setEditForm(null)
+    setEditErrorMessage("")
+  }
+
+  function updateEditForm<Field extends keyof EditReceiptForm>(
+    field: Field,
+    value: EditReceiptForm[Field]
+  ) {
+    setEditForm((current) => (current ? { ...current, [field]: value } : current))
+  }
+
+  async function saveReceiptEdits() {
+    if (!editingReceiptId || !editForm) {
+      return
+    }
+
+    const totalAmountDue = Number(editForm.totalAmountDue)
+    const taxableSales = Number(editForm.taxableSales)
+    const vatAmount = Number(editForm.vatAmount)
+
+    if (
+      Number.isNaN(totalAmountDue) ||
+      Number.isNaN(taxableSales) ||
+      Number.isNaN(vatAmount) ||
+      totalAmountDue < 0 ||
+      taxableSales < 0 ||
+      vatAmount < 0
+    ) {
+      setEditErrorMessage("Amounts must be valid zero-or-greater numbers.")
+      return
+    }
+
+    setEditErrorMessage("")
+
+    try {
+      const updatedReceipt = await editReceiptMutation.mutateAsync({
+        id: editingReceiptId,
+        merchantName: editForm.merchantName.trim(),
+        tinNumber: editForm.tinNumber.trim(),
+        officialReceiptNumber: editForm.officialReceiptNumber.trim(),
+        purchaseDate: editForm.purchaseDate.trim(),
+        totalAmountDue,
+        taxableSales,
+        vatAmount,
+        notes: editForm.notes,
+        reviewStatus: editForm.reviewStatus,
+        category: editForm.category.trim() || "Uncategorized",
+      })
+
+      closeEditDialog()
+      setErrorMessage("")
+      setFeedbackTone("success")
+      setFeedbackMessage(
+        `Updated ${updatedReceipt.merchantName || updatedReceipt.sourceFileName}.`
+      )
+    } catch (error) {
+      setEditErrorMessage(
+        error instanceof Error ? error.message : "Could not update this receipt."
+      )
+    }
+  }
+
   return (
     <main className="min-h-svh bg-background">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
@@ -374,7 +526,7 @@ export function ReceiptsWorkspace() {
             <div className="flex flex-col gap-1">
               <CardTitle>Receipts list</CardTitle>
               <CardDescription>
-                {filteredReceipts.length} shown • {selectedIds.length} selected
+                {filteredReceipts.length} shown • {selectedIds.length} selected • Page {safeCurrentPage} of {totalPages}
               </CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -384,11 +536,35 @@ export function ReceiptsWorkspace() {
               </Button>
               <Button
                 size="sm"
+                variant="ghost"
+                disabled={activeFilterCount === 0}
+                onClick={clearAllFilters}
+              >
+                Clear filters
+              </Button>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                disabled={isRefreshing || isLoading}
+                onClick={refreshReceipts}
+                aria-label="Refresh receipts"
+                title="Refresh receipts"
+              >
+                {isRefreshing ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+              </Button>
+              <Button
+                size="sm"
                 variant="outline"
                 disabled={isSaving || selectedIds.length === 0}
                 onClick={() => applyStatus("reviewed")}
               >
-                {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                {pendingBulkAction === "reviewed" ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : null}
                 Mark reviewed
               </Button>
               <Button
@@ -397,7 +573,9 @@ export function ReceiptsWorkspace() {
                 disabled={isSaving || selectedIds.length === 0}
                 onClick={() => applyStatus("posted")}
               >
-                {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                {pendingBulkAction === "posted" ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : null}
                 Mark posted
               </Button>
               <Button
@@ -406,7 +584,9 @@ export function ReceiptsWorkspace() {
                 disabled={isSaving || selectedIds.length === 0}
                 onClick={() => applyStatus("archived")}
               >
-                {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                {pendingBulkAction === "archived" ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : null}
                 Archive
               </Button>
               <Button size="sm" variant="outline" disabled={filteredReceipts.length === 0} onClick={exportVisibleList}>
@@ -454,76 +634,115 @@ export function ReceiptsWorkspace() {
             ) : filteredReceipts.length === 0 ? (
               <p className="text-sm text-muted-foreground">No receipts found.</p>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-12">Pick</TableHead>
-                    <TableHead>Merchant</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead className="text-right">Total amount due</TableHead>
-                    <TableHead className="text-right">VAT</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead>Stage</TableHead>
-                    <TableHead>Duplicate</TableHead>
-                    <TableHead className="text-right">Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredReceipts.map((receipt) => (
-                    <TableRow
-                      key={receipt.id}
-                      className={cn(
-                        "transition-colors duration-200",
-                        selectedSet.has(receipt.id) && "bg-primary/5"
-                      )}
-                    >
-                      <TableCell>
-                        <Checkbox
-                          checked={selectedSet.has(receipt.id)}
-                          onCheckedChange={(checked) => toggleSelection(receipt.id, checked)}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex min-w-44 flex-col gap-1">
-                          <span className="font-medium">
-                            {receipt.merchantName || "Unknown merchant"}
-                          </span>
-                          <span className="text-xs text-muted-foreground truncate">
-                            {receipt.sourceFileName}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>{formatDate(receipt.createdAt)}</TableCell>
-                      <TableCell className="text-right">
-                        {formatCurrency(receipt.totalAmountDue)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {formatCurrency(receipt.vatAmount)}
-                      </TableCell>
-                      <TableCell>{mainCategory(receipt)}</TableCell>
-                      <TableCell>
-                        <Badge variant={statusBadge(receipt.reviewStatus)}>
-                          {statusLabel[receipt.reviewStatus]}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {nearDuplicates.has(receipt.id) ? (
-                          <Badge variant="warning">Possible</Badge>
-                        ) : (
-                          <Badge variant="outline">Low</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button size="sm" variant="outline" asChild>
-                          <a href={receipt.sourceFileUrl} target="_blank" rel="noreferrer">
-                            Open
-                          </a>
-                        </Button>
-                      </TableCell>
+              <div className="grid gap-4">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-12 whitespace-nowrap">Pick</TableHead>
+                      <TableHead className="whitespace-nowrap">Merchant</TableHead>
+                      <TableHead className="whitespace-nowrap">Date</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">Amount Due</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">VAT</TableHead>
+                      <TableHead className="whitespace-nowrap">Category</TableHead>
+                      <TableHead className="whitespace-nowrap">Stage</TableHead>
+                      <TableHead className="whitespace-nowrap">Duplicate</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">Action</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {paginatedReceipts.map((receipt) => (
+                      <TableRow
+                        key={receipt.id}
+                        className={cn(
+                          "transition-colors duration-200",
+                          selectedSet.has(receipt.id) && "bg-primary/5"
+                        )}
+                      >
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedSet.has(receipt.id)}
+                            onCheckedChange={(checked) => toggleSelection(receipt.id, checked)}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex min-w-44 flex-col gap-1">
+                            <span className="font-medium">
+                              {receipt.merchantName || "Unknown merchant"}
+                            </span>
+                            <span className="text-xs text-muted-foreground truncate">
+                              {receipt.sourceFileName}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>{formatDate(receipt.createdAt)}</TableCell>
+                        <TableCell className="text-right">
+                          {formatCurrency(receipt.totalAmountDue)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {formatCurrency(receipt.vatAmount)}
+                        </TableCell>
+                        <TableCell>{mainCategory(receipt)}</TableCell>
+                        <TableCell>
+                          <Badge variant={statusBadge(receipt.reviewStatus)}>
+                            {statusLabel[receipt.reviewStatus]}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {nearDuplicates.has(receipt.id) ? (
+                            <Badge variant="warning">Possible</Badge>
+                          ) : (
+                            <Badge variant="outline">Low</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => openEditDialog(receipt)}
+                            >
+                              <PencilLine data-icon="inline-start" />
+                              Edit
+                            </Button>
+                            <Button size="xs" variant="outline" asChild>
+                              <a href={receipt.sourceFileUrl} target="_blank" rel="noreferrer">
+                                Open
+                              </a>
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+
+                <div className="flex flex-col gap-3 border-t pt-4 text-sm sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-muted-foreground">
+                    Showing {pageStartIndex + 1}-{pageEndIndex} of {filteredReceipts.length} receipts
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={safeCurrentPage === 1}
+                      onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                    >
+                      Previous
+                    </Button>
+                    <div className="rounded-full border px-3 py-1 text-sm text-muted-foreground">
+                      Page {safeCurrentPage} / {totalPages}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={safeCurrentPage === totalPages}
+                      onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              </div>
             )}
 
             {resolvedErrorMessage ? (
@@ -615,6 +834,187 @@ export function ReceiptsWorkspace() {
             </Card>
           </div>
         ) : null}
+
+        {editingReceipt && editForm ? (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-background/80 p-4 backdrop-blur-sm sm:items-center">
+            <Card className="max-h-[90svh] w-full max-w-5xl overflow-y-auto">
+              <CardHeader className="flex flex-col gap-3 border-b sm:flex-row sm:items-start sm:justify-between">
+                <div className="space-y-1">
+                  <CardTitle>Edit receipt</CardTitle>
+                  <CardDescription>
+                    Update the extracted bookkeeping fields for {editingReceipt.sourceFileName}.
+                  </CardDescription>
+                </div>
+                <Button size="sm" variant="outline" onClick={closeEditDialog} disabled={isEditSaving}>
+                  Close
+                </Button>
+              </CardHeader>
+              <CardContent className="grid gap-6 p-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(18rem,0.8fr)]">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <EditField label="Merchant name">
+                    <Input
+                      value={editForm.merchantName}
+                      onChange={(event) => updateEditForm("merchantName", event.target.value)}
+                      placeholder="Merchant"
+                    />
+                  </EditField>
+
+                  <EditField label="TIN">
+                    <Input
+                      value={editForm.tinNumber}
+                      onChange={(event) => updateEditForm("tinNumber", event.target.value)}
+                      placeholder="TIN number"
+                    />
+                  </EditField>
+
+                  <EditField label="Receipt number">
+                    <Input
+                      value={editForm.officialReceiptNumber}
+                      onChange={(event) =>
+                        updateEditForm("officialReceiptNumber", event.target.value)
+                      }
+                      placeholder="OR number"
+                    />
+                  </EditField>
+
+                  <EditField label="Purchase date">
+                    <Input
+                      value={editForm.purchaseDate}
+                      onChange={(event) => updateEditForm("purchaseDate", event.target.value)}
+                      placeholder="YYYY-MM-DD"
+                    />
+                  </EditField>
+
+                  <EditField label="Total amount due">
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editForm.totalAmountDue}
+                      onChange={(event) => updateEditForm("totalAmountDue", event.target.value)}
+                    />
+                  </EditField>
+
+                  <EditField label="Taxable sales">
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editForm.taxableSales}
+                      onChange={(event) => updateEditForm("taxableSales", event.target.value)}
+                    />
+                  </EditField>
+
+                  <EditField label="VAT amount">
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editForm.vatAmount}
+                      onChange={(event) => updateEditForm("vatAmount", event.target.value)}
+                    />
+                  </EditField>
+
+                  <FilterSelect
+                    label="Review status"
+                    value={editForm.reviewStatus}
+                    onChange={(value) => updateEditForm("reviewStatus", value as ReviewStatus)}
+                    options={[
+                      { value: "new", label: "New" },
+                      { value: "reviewed", label: "Reviewed" },
+                      { value: "posted", label: "Posted" },
+                      { value: "archived", label: "Archived" },
+                    ]}
+                  />
+
+                  <div className="md:col-span-2">
+                    <EditField label="Category for line items">
+                      <Input
+                        value={editForm.category}
+                        onChange={(event) => updateEditForm("category", event.target.value)}
+                        placeholder="Uncategorized"
+                      />
+                    </EditField>
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <EditField label="Notes">
+                      <textarea
+                        value={editForm.notes}
+                        onChange={(event) => updateEditForm("notes", event.target.value)}
+                        placeholder="Add bookkeeping notes"
+                        className="min-h-32 w-full rounded-3xl border border-transparent bg-input/50 px-3 py-2 text-sm outline-none transition-[color,box-shadow,background-color] focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+                      />
+                    </EditField>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-4">
+                  <div className="rounded-2xl border bg-muted/25 p-4">
+                    <p className="text-sm font-medium">Current receipt context</p>
+                    <div className="mt-3 grid gap-3 text-sm text-muted-foreground">
+                      <div>
+                        <span className="font-medium text-foreground">Source file:</span>{" "}
+                        {editingReceipt.sourceFileName}
+                      </div>
+                      <div>
+                        <span className="font-medium text-foreground">Detected items:</span>{" "}
+                        {editingReceipt.items.length}
+                      </div>
+                      <div>
+                        <span className="font-medium text-foreground">Confidence:</span>{" "}
+                        {Math.round(editingReceipt.confidence)}%
+                      </div>
+                      <div>
+                        <span className="font-medium text-foreground">Saved:</span>{" "}
+                        {formatDate(editingReceipt.createdAt)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border bg-muted/25 p-4">
+                    <p className="text-sm font-medium">Line item preview</p>
+                    <div className="mt-3 grid gap-2">
+                      {editingReceipt.items.length > 0 ? (
+                        editingReceipt.items.slice(0, 5).map((item, index) => (
+                          <div
+                            key={`${item.description}-${index}`}
+                            className="rounded-xl border bg-background px-3 py-2 text-sm"
+                          >
+                            <div className="font-medium text-foreground">
+                              {item.description || "Untitled item"}
+                            </div>
+                            <div className="mt-1 text-muted-foreground">
+                              Qty {item.quantity} • {formatCurrency(item.price)} • {item.category || "Uncategorized"}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No line items found on this receipt.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {editErrorMessage ? (
+                    <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                      {editErrorMessage}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-auto flex flex-wrap justify-end gap-2">
+                    <Button variant="outline" onClick={closeEditDialog} disabled={isEditSaving}>
+                      Cancel
+                    </Button>
+                    <Button onClick={saveReceiptEdits} disabled={isEditSaving}>
+                      {isEditSaving ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                      Save changes
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        ) : null}
       </div>
     </main>
   )
@@ -633,6 +1033,21 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="mt-1 text-xl font-semibold">{value}</p>
     </div>
+  )
+}
+
+function EditField({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <label className="grid gap-1.5">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      {children}
+    </label>
   )
 }
 
@@ -707,4 +1122,19 @@ function FilterSelect({
       </Select>
     </div>
   )
+}
+
+function buildEditReceiptForm(receipt: StoredReceipt): EditReceiptForm {
+  return {
+    merchantName: receipt.merchantName,
+    tinNumber: receipt.tinNumber,
+    officialReceiptNumber: receipt.officialReceiptNumber,
+    purchaseDate: receipt.purchaseDate,
+    totalAmountDue: String(receipt.totalAmountDue),
+    taxableSales: String(receipt.taxableSales),
+    vatAmount: String(receipt.vatAmount),
+    reviewStatus: receipt.reviewStatus,
+    category: mainCategory(receipt),
+    notes: receipt.notes,
+  }
 }

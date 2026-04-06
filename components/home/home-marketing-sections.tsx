@@ -104,7 +104,7 @@ export function HomeMarketingSections() {
 
       <section className="grid gap-4 lg:grid-cols-3">
         {outcomes.map((item) => (
-          <Card key={item.title} className="border-border bg-card/70 shadow-none">
+          <Card key={item.title} className="border-border bg-card/70 shadow-none pb-4">
             <CardHeader>
               <Badge variant="secondary" className="w-fit">
                 Outcome
