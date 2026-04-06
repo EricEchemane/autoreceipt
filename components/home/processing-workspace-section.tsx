@@ -88,7 +88,10 @@ export function ProcessingWorkspaceSection({
   const failedCount = queueItems.filter((item) => item.status === "error").length
 
   return (
-    <section className="grid gap-4 rounded-[2rem] border bg-card/70 p-4 shadow-sm sm:p-6">
+    <section
+      id="workspace"
+      className="grid gap-4 rounded-[2rem] border bg-card/70 p-4 shadow-sm sm:p-6 scroll-mt-20"
+    >
       <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
         <div className="flex flex-col gap-1">
           <Badge variant="secondary" className="w-fit">

@@ -46,7 +46,7 @@ export function RecentReceiptsSection({ receipts }: RecentReceiptsSectionProps) 
   }, [activeReceiptId, receipts])
 
   return (
-    <section id="recent-receipts" className='scroll-mt-24'>
+    <section id="recent-receipts" className='scroll-mt-20'>
       <Card className="border-border">
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
