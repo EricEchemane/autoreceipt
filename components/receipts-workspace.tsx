@@ -1,8 +1,8 @@
 "use client"
 
 import Link from "next/link"
-import { CheckCircle2, LoaderCircle } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { CheckCircle2, LoaderCircle, PencilLine } from "lucide-react"
+import { type ReactNode, useEffect, useMemo, useState } from "react"
 import { utils as xlsxUtils, writeFile as writeXlsxFile } from "xlsx"
 
 import type { StoredReceipt } from "@/lib/receipt-schema"
@@ -34,6 +34,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
+  useEditReceiptMutation,
   useReceiptsQuery,
   useUpdateReceiptsMutation,
 } from "@/lib/queries/receipts"
@@ -43,6 +44,18 @@ type ReviewStatus = StoredReceipt["reviewStatus"]
 type DateRange = "all" | "30d" | "this-month"
 type SortBy = "newest" | "oldest" | "amount-high" | "amount-low"
 type FeedbackTone = "success" | "info"
+type EditReceiptForm = {
+  merchantName: string
+  tinNumber: string
+  officialReceiptNumber: string
+  purchaseDate: string
+  totalAmountDue: string
+  taxableSales: string
+  vatAmount: string
+  reviewStatus: ReviewStatus
+  category: string
+  notes: string
+}
 
 const statusLabel: Record<ReviewStatus, string> = {
   new: "New",
@@ -106,6 +119,9 @@ export function ReceiptsWorkspace() {
   const [errorMessage, setErrorMessage] = useState("")
   const [feedbackMessage, setFeedbackMessage] = useState("")
   const [feedbackTone, setFeedbackTone] = useState<FeedbackTone>("info")
+  const [editingReceiptId, setEditingReceiptId] = useState<string | null>(null)
+  const [editForm, setEditForm] = useState<EditReceiptForm | null>(null)
+  const [editErrorMessage, setEditErrorMessage] = useState("")
 
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [query, setQuery] = useState("")
@@ -117,10 +133,12 @@ export function ReceiptsWorkspace() {
 
   const receiptsQuery = useReceiptsQuery()
   const updateReceiptsMutation = useUpdateReceiptsMutation()
+  const editReceiptMutation = useEditReceiptMutation()
   const receipts = receiptsQuery.data ?? emptyReceipts
   const isLoading = receiptsQuery.isLoading
   const isRefreshing = receiptsQuery.isFetching && !isLoading
   const isSaving = updateReceiptsMutation.isPending
+  const isEditSaving = editReceiptMutation.isPending
   const resolvedErrorMessage =
     errorMessage ||
     (receiptsQuery.error instanceof Error
@@ -133,6 +151,8 @@ export function ReceiptsWorkspace() {
     merchantFilter !== "all",
     sortBy !== "newest",
   ].filter(Boolean).length
+  const editingReceipt =
+    receipts.find((receipt) => receipt.id === editingReceiptId) ?? null
 
   useEffect(() => {
     if (!feedbackMessage) {
@@ -326,6 +346,80 @@ export function ReceiptsWorkspace() {
     )
   }
 
+  function openEditDialog(receipt: StoredReceipt) {
+    setEditingReceiptId(receipt.id)
+    setEditForm(buildEditReceiptForm(receipt))
+    setEditErrorMessage("")
+  }
+
+  function closeEditDialog() {
+    if (isEditSaving) {
+      return
+    }
+
+    setEditingReceiptId(null)
+    setEditForm(null)
+    setEditErrorMessage("")
+  }
+
+  function updateEditForm<Field extends keyof EditReceiptForm>(
+    field: Field,
+    value: EditReceiptForm[Field]
+  ) {
+    setEditForm((current) => (current ? { ...current, [field]: value } : current))
+  }
+
+  async function saveReceiptEdits() {
+    if (!editingReceiptId || !editForm) {
+      return
+    }
+
+    const totalAmountDue = Number(editForm.totalAmountDue)
+    const taxableSales = Number(editForm.taxableSales)
+    const vatAmount = Number(editForm.vatAmount)
+
+    if (
+      Number.isNaN(totalAmountDue) ||
+      Number.isNaN(taxableSales) ||
+      Number.isNaN(vatAmount) ||
+      totalAmountDue < 0 ||
+      taxableSales < 0 ||
+      vatAmount < 0
+    ) {
+      setEditErrorMessage("Amounts must be valid zero-or-greater numbers.")
+      return
+    }
+
+    setEditErrorMessage("")
+
+    try {
+      const updatedReceipt = await editReceiptMutation.mutateAsync({
+        id: editingReceiptId,
+        merchantName: editForm.merchantName.trim(),
+        tinNumber: editForm.tinNumber.trim(),
+        officialReceiptNumber: editForm.officialReceiptNumber.trim(),
+        purchaseDate: editForm.purchaseDate.trim(),
+        totalAmountDue,
+        taxableSales,
+        vatAmount,
+        notes: editForm.notes,
+        reviewStatus: editForm.reviewStatus,
+        category: editForm.category.trim() || "Uncategorized",
+      })
+
+      closeEditDialog()
+      setErrorMessage("")
+      setFeedbackTone("success")
+      setFeedbackMessage(
+        `Updated ${updatedReceipt.merchantName || updatedReceipt.sourceFileName}.`
+      )
+    } catch (error) {
+      setEditErrorMessage(
+        error instanceof Error ? error.message : "Could not update this receipt."
+      )
+    }
+  }
+
   return (
     <main className="min-h-svh bg-background">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
@@ -514,11 +608,21 @@ export function ReceiptsWorkspace() {
                         )}
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button size="sm" variant="outline" asChild>
-                          <a href={receipt.sourceFileUrl} target="_blank" rel="noreferrer">
-                            Open
-                          </a>
-                        </Button>
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={() => openEditDialog(receipt)}
+                          >
+                            <PencilLine data-icon="inline-start" />
+                            Edit
+                          </Button>
+                          <Button size="xs" variant="outline" asChild>
+                            <a href={receipt.sourceFileUrl} target="_blank" rel="noreferrer">
+                              Open
+                            </a>
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -615,6 +719,187 @@ export function ReceiptsWorkspace() {
             </Card>
           </div>
         ) : null}
+
+        {editingReceipt && editForm ? (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-background/80 p-4 backdrop-blur-sm sm:items-center">
+            <Card className="max-h-[90svh] w-full max-w-5xl overflow-y-auto">
+              <CardHeader className="flex flex-col gap-3 border-b sm:flex-row sm:items-start sm:justify-between">
+                <div className="space-y-1">
+                  <CardTitle>Edit receipt</CardTitle>
+                  <CardDescription>
+                    Update the extracted bookkeeping fields for {editingReceipt.sourceFileName}.
+                  </CardDescription>
+                </div>
+                <Button size="sm" variant="outline" onClick={closeEditDialog} disabled={isEditSaving}>
+                  Close
+                </Button>
+              </CardHeader>
+              <CardContent className="grid gap-6 p-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(18rem,0.8fr)]">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <EditField label="Merchant name">
+                    <Input
+                      value={editForm.merchantName}
+                      onChange={(event) => updateEditForm("merchantName", event.target.value)}
+                      placeholder="Merchant"
+                    />
+                  </EditField>
+
+                  <EditField label="TIN">
+                    <Input
+                      value={editForm.tinNumber}
+                      onChange={(event) => updateEditForm("tinNumber", event.target.value)}
+                      placeholder="TIN number"
+                    />
+                  </EditField>
+
+                  <EditField label="Receipt number">
+                    <Input
+                      value={editForm.officialReceiptNumber}
+                      onChange={(event) =>
+                        updateEditForm("officialReceiptNumber", event.target.value)
+                      }
+                      placeholder="OR number"
+                    />
+                  </EditField>
+
+                  <EditField label="Purchase date">
+                    <Input
+                      value={editForm.purchaseDate}
+                      onChange={(event) => updateEditForm("purchaseDate", event.target.value)}
+                      placeholder="YYYY-MM-DD"
+                    />
+                  </EditField>
+
+                  <EditField label="Total amount due">
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editForm.totalAmountDue}
+                      onChange={(event) => updateEditForm("totalAmountDue", event.target.value)}
+                    />
+                  </EditField>
+
+                  <EditField label="Taxable sales">
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editForm.taxableSales}
+                      onChange={(event) => updateEditForm("taxableSales", event.target.value)}
+                    />
+                  </EditField>
+
+                  <EditField label="VAT amount">
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editForm.vatAmount}
+                      onChange={(event) => updateEditForm("vatAmount", event.target.value)}
+                    />
+                  </EditField>
+
+                  <FilterSelect
+                    label="Review status"
+                    value={editForm.reviewStatus}
+                    onChange={(value) => updateEditForm("reviewStatus", value as ReviewStatus)}
+                    options={[
+                      { value: "new", label: "New" },
+                      { value: "reviewed", label: "Reviewed" },
+                      { value: "posted", label: "Posted" },
+                      { value: "archived", label: "Archived" },
+                    ]}
+                  />
+
+                  <div className="md:col-span-2">
+                    <EditField label="Category for line items">
+                      <Input
+                        value={editForm.category}
+                        onChange={(event) => updateEditForm("category", event.target.value)}
+                        placeholder="Uncategorized"
+                      />
+                    </EditField>
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <EditField label="Notes">
+                      <textarea
+                        value={editForm.notes}
+                        onChange={(event) => updateEditForm("notes", event.target.value)}
+                        placeholder="Add bookkeeping notes"
+                        className="min-h-32 w-full rounded-3xl border border-transparent bg-input/50 px-3 py-2 text-sm outline-none transition-[color,box-shadow,background-color] focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+                      />
+                    </EditField>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-4">
+                  <div className="rounded-2xl border bg-muted/25 p-4">
+                    <p className="text-sm font-medium">Current receipt context</p>
+                    <div className="mt-3 grid gap-3 text-sm text-muted-foreground">
+                      <div>
+                        <span className="font-medium text-foreground">Source file:</span>{" "}
+                        {editingReceipt.sourceFileName}
+                      </div>
+                      <div>
+                        <span className="font-medium text-foreground">Detected items:</span>{" "}
+                        {editingReceipt.items.length}
+                      </div>
+                      <div>
+                        <span className="font-medium text-foreground">Confidence:</span>{" "}
+                        {Math.round(editingReceipt.confidence)}%
+                      </div>
+                      <div>
+                        <span className="font-medium text-foreground">Saved:</span>{" "}
+                        {formatDate(editingReceipt.createdAt)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border bg-muted/25 p-4">
+                    <p className="text-sm font-medium">Line item preview</p>
+                    <div className="mt-3 grid gap-2">
+                      {editingReceipt.items.length > 0 ? (
+                        editingReceipt.items.slice(0, 5).map((item, index) => (
+                          <div
+                            key={`${item.description}-${index}`}
+                            className="rounded-xl border bg-background px-3 py-2 text-sm"
+                          >
+                            <div className="font-medium text-foreground">
+                              {item.description || "Untitled item"}
+                            </div>
+                            <div className="mt-1 text-muted-foreground">
+                              Qty {item.quantity} • {formatCurrency(item.price)} • {item.category || "Uncategorized"}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No line items found on this receipt.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {editErrorMessage ? (
+                    <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                      {editErrorMessage}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-auto flex flex-wrap justify-end gap-2">
+                    <Button variant="outline" onClick={closeEditDialog} disabled={isEditSaving}>
+                      Cancel
+                    </Button>
+                    <Button onClick={saveReceiptEdits} disabled={isEditSaving}>
+                      {isEditSaving ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                      Save changes
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        ) : null}
       </div>
     </main>
   )
@@ -633,6 +918,21 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="mt-1 text-xl font-semibold">{value}</p>
     </div>
+  )
+}
+
+function EditField({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <label className="grid gap-1.5">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      {children}
+    </label>
   )
 }
 
@@ -707,4 +1007,19 @@ function FilterSelect({
       </Select>
     </div>
   )
+}
+
+function buildEditReceiptForm(receipt: StoredReceipt): EditReceiptForm {
+  return {
+    merchantName: receipt.merchantName,
+    tinNumber: receipt.tinNumber,
+    officialReceiptNumber: receipt.officialReceiptNumber,
+    purchaseDate: receipt.purchaseDate,
+    totalAmountDue: String(receipt.totalAmountDue),
+    taxableSales: String(receipt.taxableSales),
+    vatAmount: String(receipt.vatAmount),
+    reviewStatus: receipt.reviewStatus,
+    category: mainCategory(receipt),
+    notes: receipt.notes,
+  }
 }
