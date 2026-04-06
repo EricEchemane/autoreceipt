@@ -172,7 +172,7 @@ export function ProcessingWorkspace() {
   const activeStep = Math.min(Math.floor(analysisProgress / 34), 3)
   const activeHighlight =
     loadingHighlights[
-      Math.min(Math.floor(analysisProgress / 25), loadingHighlights.length - 1)
+    Math.min(Math.floor(analysisProgress / 25), loadingHighlights.length - 1)
     ]
   const hasSelectedReceipts = batchStats.count > 0
 
@@ -319,7 +319,7 @@ export function ProcessingWorkspace() {
           if (errorPayload.error) {
             message = errorPayload.error
           }
-        } catch {}
+        } catch { }
 
         throw new Error(message)
       }
@@ -489,13 +489,13 @@ export function ProcessingWorkspace() {
         item.status === "done"
           ? item
           : {
-              ...item,
-              status: "queued",
-              progress: 0,
-              streamedText: "",
-              errorMessage: "",
-              optimized: false,
-            }
+            ...item,
+            status: "queued",
+            progress: 0,
+            streamedText: "",
+            errorMessage: "",
+            optimized: false,
+          }
       )
     )
 

@@ -1,10 +1,8 @@
-import Link from "next/link"
 import { ArrowUpRight, Files, ShieldCheck } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 
-import { GUEST_FREE_SCAN_LIMIT, type MetricCardDefinition } from "./shared"
+import { type MetricCardDefinition } from "./shared"
 
 type HomeHeroSectionProps = {
   maxParallelUploads: number
@@ -41,12 +39,6 @@ export function HomeHeroSection({
           <Badge variant="outline" className="w-fit">
             Built for Real Bookkeeping Work
           </Badge>
-          <Button size="sm" variant="outline" asChild>
-            <Link href="/receipts">Open receipts</Link>
-          </Button>
-          <Button size="sm" variant="outline" asChild>
-            <Link href="/insights">Open summary</Link>
-          </Button>
         </div>
         <div className="flex flex-col gap-3">
           <h1 className="max-w-3xl text-4xl leading-tight font-semibold tracking-tight sm:text-5xl">
@@ -57,9 +49,6 @@ export function HomeHeroSection({
             need faster month-end cleanup. Upload receipts in batch, extract key
             fields, and review categorized line items before posting to books.
           </p>
-          <div className="mt-1 w-fit rounded-full border border-primary/30 bg-primary/5 px-3 py-1.5 text-sm text-foreground">
-            Try {GUEST_FREE_SCAN_LIMIT} receipts free, no sign-up required.
-          </div>
         </div>
       </div>
       <div className="mt-6 grid gap-3 sm:grid-cols-3">
@@ -90,4 +79,3 @@ function MetricCard({
     </div>
   )
 }
-
