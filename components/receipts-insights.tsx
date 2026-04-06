@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
+import { useMemo } from "react"
 
 import type { StoredReceipt } from "@/lib/receipt-schema"
 import { Badge } from "@/components/ui/badge"
@@ -14,7 +14,10 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { useReceiptsQuery } from "@/lib/queries/receipts"
 import { cn } from "@/lib/utils"
+
+const emptyReceipts: StoredReceipt[] = []
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat("en-PH", {
@@ -71,27 +74,10 @@ function duplicateIds(receipts: StoredReceipt[]) {
 }
 
 export function ReceiptsInsights() {
-  const [receipts, setReceipts] = useState<StoredReceipt[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState("")
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const response = await fetch("/api/receipts")
-        const payload = (await response.json()) as { receipts?: StoredReceipt[] }
-        setReceipts(payload.receipts ?? [])
-      } catch (loadError) {
-        setError(
-          loadError instanceof Error ? loadError.message : "Could not load summary."
-        )
-      } finally {
-        setIsLoading(false)
-      }
-    }
-
-    void load()
-  }, [])
+  const receiptsQuery = useReceiptsQuery()
+  const receipts = receiptsQuery.data ?? emptyReceipts
+  const isLoading = receiptsQuery.isLoading
+  const error = receiptsQuery.error
 
   const totals = useMemo(() => {
     const totalSpend = receipts.reduce((sum, receipt) => sum + receipt.totalAmountDue, 0)
@@ -333,9 +319,9 @@ export function ReceiptsInsights() {
           </Card>
         </section>
 
-        {error ? (
+        {error instanceof Error ? (
           <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {error}
+            {error.message}
           </div>
         ) : null}
       </div>

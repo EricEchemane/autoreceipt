@@ -1,52 +1,23 @@
 "use client"
 
-import { useEffect, useState } from "react"
-
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-
-type Usage = {
-  used: number
-  limit: number
-  remaining: number
-  plan: string
-  monthKey: string
-  trackingEnabled: boolean
-}
+import {
+  useBillingUsageActionMutation,
+  useBillingUsageQuery,
+} from "@/lib/queries/billing-usage"
 
 export function BillingUsageSimulator({ devMode }: { devMode: boolean }) {
-  const [usage, setUsage] = useState<Usage | null>(null)
-  const [isPending, setIsPending] = useState(false)
-
-  async function loadUsage() {
-    const response = await fetch("/api/billing/usage")
-    const payload = (await response.json()) as { usage?: Usage }
-    setUsage(payload.usage ?? null)
-  }
-
-  useEffect(() => {
-    void loadUsage()
-  }, [])
+  const usageQuery = useBillingUsageQuery()
+  const usageActionMutation = useBillingUsageActionMutation()
+  const usage = usageQuery.data ?? null
+  const isPending = usageActionMutation.isPending
 
   async function runAction(action: "simulate_limit" | "reset_usage") {
-    setIsPending(true)
     try {
-      const response = await fetch("/api/billing/usage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
-      })
-      const payload = (await response.json()) as { usage?: Usage; error?: string }
-
-      if (!response.ok) {
-        throw new Error(payload.error ?? "Action failed.")
-      }
-
-      setUsage(payload.usage ?? null)
+      await usageActionMutation.mutateAsync(action)
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "Action failed.")
-    } finally {
-      setIsPending(false)
     }
   }
 

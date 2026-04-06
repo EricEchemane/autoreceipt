@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 
 import "./globals.css"
+import { QueryProvider } from "@/components/query-provider"
 import { SiteHeader } from "@/components/site-header"
 import { ThemeProvider } from "@/components/theme-provider"
 import { cn } from "@/lib/utils"
@@ -52,8 +53,10 @@ export default function RootLayout({
     >
       <body>
         <ThemeProvider>
-          <SiteHeader />
-          {children}
+          <QueryProvider>
+            <SiteHeader />
+            {children}
+          </QueryProvider>
         </ThemeProvider>
         <Analytics />
       </body>
