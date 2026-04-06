@@ -346,6 +346,18 @@ export function ReceiptsWorkspace() {
     )
   }
 
+  function clearAllFilters() {
+    setQuery("")
+    setStatusFilter("all")
+    setDateRange("all")
+    setMerchantFilter("all")
+    setSortBy("newest")
+    setIsFilterOpen(false)
+    setErrorMessage("")
+    setFeedbackTone("info")
+    setFeedbackMessage(`${receipts.length} receipt${receipts.length === 1 ? "" : "s"} shown after clearing filters.`)
+  }
+
   function openEditDialog(receipt: StoredReceipt) {
     setEditingReceiptId(receipt.id)
     setEditForm(buildEditReceiptForm(receipt))
@@ -475,6 +487,14 @@ export function ReceiptsWorkspace() {
               <Button size="sm" variant="outline" onClick={() => setIsFilterOpen(true)}>
                 Find & filter
                 {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={activeFilterCount === 0}
+                onClick={clearAllFilters}
+              >
+                Clear filters
               </Button>
               <Button
                 size="sm"
