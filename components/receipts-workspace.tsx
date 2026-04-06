@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { CheckCircle2, LoaderCircle } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { utils as xlsxUtils, writeFile as writeXlsxFile } from "xlsx"
 
@@ -32,10 +33,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  useReceiptsQuery,
+  useUpdateReceiptsMutation,
+} from "@/lib/queries/receipts"
+import { cn } from "@/lib/utils"
 
 type ReviewStatus = StoredReceipt["reviewStatus"]
 type DateRange = "all" | "30d" | "this-month"
 type SortBy = "newest" | "oldest" | "amount-high" | "amount-low"
+type FeedbackTone = "success" | "info"
 
 const statusLabel: Record<ReviewStatus, string> = {
   new: "New",
@@ -43,6 +50,7 @@ const statusLabel: Record<ReviewStatus, string> = {
   posted: "Posted",
   archived: "Archived",
 }
+const emptyReceipts: StoredReceipt[] = []
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat("en-PH", {
@@ -95,10 +103,9 @@ function duplicateIds(receipts: StoredReceipt[]) {
 }
 
 export function ReceiptsWorkspace() {
-  const [receipts, setReceipts] = useState<StoredReceipt[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [isSaving, setIsSaving] = useState(false)
   const [errorMessage, setErrorMessage] = useState("")
+  const [feedbackMessage, setFeedbackMessage] = useState("")
+  const [feedbackTone, setFeedbackTone] = useState<FeedbackTone>("info")
 
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [query, setQuery] = useState("")
@@ -108,23 +115,38 @@ export function ReceiptsWorkspace() {
   const [sortBy, setSortBy] = useState<SortBy>("newest")
   const [isFilterOpen, setIsFilterOpen] = useState(false)
 
+  const receiptsQuery = useReceiptsQuery()
+  const updateReceiptsMutation = useUpdateReceiptsMutation()
+  const receipts = receiptsQuery.data ?? emptyReceipts
+  const isLoading = receiptsQuery.isLoading
+  const isRefreshing = receiptsQuery.isFetching && !isLoading
+  const isSaving = updateReceiptsMutation.isPending
+  const resolvedErrorMessage =
+    errorMessage ||
+    (receiptsQuery.error instanceof Error
+      ? receiptsQuery.error.message
+      : "")
+  const activeFilterCount = [
+    query.trim().length > 0,
+    statusFilter !== "all",
+    dateRange !== "all",
+    merchantFilter !== "all",
+    sortBy !== "newest",
+  ].filter(Boolean).length
+
   useEffect(() => {
-    async function loadReceipts() {
-      try {
-        const response = await fetch("/api/receipts")
-        const payload = (await response.json()) as { receipts?: StoredReceipt[] }
-        setReceipts(payload.receipts ?? [])
-      } catch (error) {
-        setErrorMessage(
-          error instanceof Error ? error.message : "Could not load saved receipts."
-        )
-      } finally {
-        setIsLoading(false)
-      }
+    if (!feedbackMessage) {
+      return
     }
 
-    void loadReceipts()
-  }, [])
+    const timeoutId = window.setTimeout(() => {
+      setFeedbackMessage("")
+    }, 2800)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [feedbackMessage])
 
   const merchants = useMemo(
     () =>
@@ -227,29 +249,23 @@ export function ReceiptsWorkspace() {
       return
     }
 
-    setIsSaving(true)
     setErrorMessage("")
 
     try {
-      const response = await fetch("/api/receipts", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: selectedIds, reviewStatus: status }),
+      const affectedCount = selectedIds.length
+      await updateReceiptsMutation.mutateAsync({
+        ids: selectedIds,
+        reviewStatus: status,
       })
-      const data = (await response.json()) as { receipts?: StoredReceipt[]; error?: string }
-
-      if (!response.ok) {
-        throw new Error(data.error ?? "Could not update selected receipts.")
-      }
-
-      setReceipts(data.receipts ?? [])
       setSelectedIds([])
+      setFeedbackTone("success")
+      setFeedbackMessage(
+        `${affectedCount} receipt${affectedCount === 1 ? "" : "s"} marked ${statusLabel[status].toLowerCase()}.`
+      )
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : "Could not update selected receipts."
       )
-    } finally {
-      setIsSaving(false)
     }
   }
 
@@ -289,6 +305,25 @@ export function ReceiptsWorkspace() {
     const workbook = xlsxUtils.book_new()
     xlsxUtils.book_append_sheet(workbook, worksheet, "Receipts")
     writeXlsxFile(workbook, `receipts-${new Date().toISOString().slice(0, 10)}.xlsx`)
+    setErrorMessage("")
+    setFeedbackTone("success")
+    setFeedbackMessage(
+      `Exported ${filteredReceipts.length} visible receipt${filteredReceipts.length === 1 ? "" : "s"}.`
+    )
+  }
+
+  function closeFiltersWithFeedback() {
+    setIsFilterOpen(false)
+    setErrorMessage("")
+    setFeedbackTone("info")
+    if (activeFilterCount === 0) {
+      setFeedbackMessage(`${filteredReceipts.length} receipt${filteredReceipts.length === 1 ? "" : "s"} shown.`)
+      return
+    }
+
+    setFeedbackMessage(
+      `Filters updated. ${filteredReceipts.length} receipt${filteredReceipts.length === 1 ? "" : "s"} shown.`
+    )
   }
 
   return (
@@ -317,10 +352,21 @@ export function ReceiptsWorkspace() {
         </section>
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <SummaryCard label="Total spend" value={formatCurrency(totals.totalSpend)} />
-          <SummaryCard label="VAT total" value={formatCurrency(totals.vatTotal)} />
-          <SummaryCard label="Need review" value={String(totals.unreviewed)} />
-          <SummaryCard label="This month" value={String(totals.thisMonth)} />
+          {isLoading ? (
+            <>
+              <SummaryCardSkeleton />
+              <SummaryCardSkeleton />
+              <SummaryCardSkeleton />
+              <SummaryCardSkeleton />
+            </>
+          ) : (
+            <>
+              <SummaryCard label="Total spend" value={formatCurrency(totals.totalSpend)} />
+              <SummaryCard label="VAT total" value={formatCurrency(totals.vatTotal)} />
+              <SummaryCard label="Need review" value={String(totals.unreviewed)} />
+              <SummaryCard label="This month" value={String(totals.thisMonth)} />
+            </>
+          )}
         </section>
 
         <Card>
@@ -334,24 +380,77 @@ export function ReceiptsWorkspace() {
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="outline" onClick={() => setIsFilterOpen(true)}>
                 Find & filter
+                {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
               </Button>
-              <Button size="sm" variant="outline" disabled={isSaving} onClick={() => applyStatus("reviewed")}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isSaving || selectedIds.length === 0}
+                onClick={() => applyStatus("reviewed")}
+              >
+                {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : null}
                 Mark reviewed
               </Button>
-              <Button size="sm" variant="outline" disabled={isSaving} onClick={() => applyStatus("posted")}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isSaving || selectedIds.length === 0}
+                onClick={() => applyStatus("posted")}
+              >
+                {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : null}
                 Mark posted
               </Button>
-              <Button size="sm" variant="outline" disabled={isSaving} onClick={() => applyStatus("archived")}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isSaving || selectedIds.length === 0}
+                onClick={() => applyStatus("archived")}
+              >
+                {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : null}
                 Archive
               </Button>
-              <Button size="sm" variant="outline" onClick={exportVisibleList}>
+              <Button size="sm" variant="outline" disabled={filteredReceipts.length === 0} onClick={exportVisibleList}>
                 Export visible list
               </Button>
             </div>
           </CardHeader>
           <CardContent className="overflow-x-auto">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex min-h-9 items-center">
+                {feedbackMessage ? (
+                  <div
+                    className={cn(
+                      "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm transition-all duration-200",
+                      feedbackTone === "success"
+                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                        : "border-border bg-muted/60 text-muted-foreground"
+                    )}
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {feedbackTone === "success" ? (
+                      <CheckCircle2 className="size-4" />
+                    ) : (
+                      <LoaderCircle className="size-4" />
+                    )}
+                    <span>{feedbackMessage}</span>
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex min-h-9 items-center text-sm text-muted-foreground">
+                {isRefreshing ? (
+                  <span className="inline-flex items-center gap-2">
+                    <LoaderCircle className="size-4 animate-spin" />
+                    Refreshing receipts...
+                  </span>
+                ) : (
+                  <span>{selectedIds.length > 0 ? `${selectedIds.length} receipt${selectedIds.length === 1 ? "" : "s"} ready for bulk action.` : "Select receipts to run bulk actions."}</span>
+                )}
+              </div>
+            </div>
+
             {isLoading ? (
-              <p className="text-sm text-muted-foreground">Loading receipts...</p>
+              <ReceiptsTableSkeleton />
             ) : filteredReceipts.length === 0 ? (
               <p className="text-sm text-muted-foreground">No receipts found.</p>
             ) : (
@@ -371,7 +470,13 @@ export function ReceiptsWorkspace() {
                 </TableHeader>
                 <TableBody>
                   {filteredReceipts.map((receipt) => (
-                    <TableRow key={receipt.id}>
+                    <TableRow
+                      key={receipt.id}
+                      className={cn(
+                        "transition-colors duration-200",
+                        selectedSet.has(receipt.id) && "bg-primary/5"
+                      )}
+                    >
                       <TableCell>
                         <Checkbox
                           checked={selectedSet.has(receipt.id)}
@@ -421,9 +526,9 @@ export function ReceiptsWorkspace() {
               </Table>
             )}
 
-            {errorMessage ? (
+            {resolvedErrorMessage ? (
               <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {errorMessage}
+                {resolvedErrorMessage}
               </div>
             ) : null}
           </CardContent>
@@ -502,7 +607,7 @@ export function ReceiptsWorkspace() {
                 </div>
 
                 <div className="md:col-span-2 xl:col-span-5 flex justify-end">
-                  <Button size="sm" onClick={() => setIsFilterOpen(false)}>
+                  <Button size="sm" onClick={closeFiltersWithFeedback}>
                     Apply filters
                   </Button>
                 </div>
@@ -527,6 +632,47 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
     <div className="rounded-2xl border bg-card px-4 py-3">
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="mt-1 text-xl font-semibold">{value}</p>
+    </div>
+  )
+}
+
+function SummaryCardSkeleton() {
+  return (
+    <div className="rounded-2xl border bg-card px-4 py-3">
+      <div className="h-3 w-20 animate-pulse rounded bg-muted" />
+      <div className="mt-3 h-7 w-28 animate-pulse rounded bg-muted" />
+    </div>
+  )
+}
+
+function ReceiptsTableSkeleton() {
+  return (
+    <div className="grid gap-3">
+      <div className="grid gap-2 rounded-xl border bg-muted/20 p-3">
+        <div className="h-4 w-40 animate-pulse rounded bg-muted" />
+        <div className="h-3 w-60 animate-pulse rounded bg-muted" />
+      </div>
+      <div className="overflow-hidden rounded-xl border">
+        {Array.from({ length: 6 }).map((_, index) => (
+          <div
+            key={index}
+            className="grid grid-cols-[2.5rem_minmax(0,1.5fr)_0.8fr_0.9fr_0.7fr_0.9fr_0.8fr_0.8fr_0.7fr] gap-3 border-b px-4 py-4 last:border-b-0"
+          >
+            <div className="h-4 w-4 animate-pulse rounded bg-muted" />
+            <div className="space-y-2">
+              <div className="h-4 w-32 animate-pulse rounded bg-muted" />
+              <div className="h-3 w-40 animate-pulse rounded bg-muted" />
+            </div>
+            <div className="h-4 w-20 animate-pulse rounded bg-muted" />
+            <div className="h-4 w-24 animate-pulse rounded bg-muted justify-self-end" />
+            <div className="h-4 w-16 animate-pulse rounded bg-muted justify-self-end" />
+            <div className="h-4 w-20 animate-pulse rounded bg-muted" />
+            <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+            <div className="h-6 w-14 animate-pulse rounded-full bg-muted" />
+            <div className="h-8 w-16 animate-pulse rounded-md bg-muted justify-self-end" />
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

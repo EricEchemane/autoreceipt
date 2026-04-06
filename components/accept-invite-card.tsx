@@ -1,7 +1,8 @@
 "use client"
 
-import { useState } from "react"
 import Link from "next/link"
+import { LoaderCircle } from "lucide-react"
+import { useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -52,12 +53,14 @@ export function AcceptInviteCard({
 }: AcceptInviteCardProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState("")
+  const [message, setMessage] = useState("")
 
   const canAccept = status === "pending"
 
   async function handleAccept() {
     setIsSubmitting(true)
     setError("")
+    setMessage("Verifying your invite and preparing the workspace...")
 
     try {
       const response = await fetch("/api/organization/invites/accept", {
@@ -76,6 +79,7 @@ export function AcceptInviteCard({
 
       window.location.href = "/billing"
     } catch (nextError) {
+      setMessage("")
       setError(
         nextError instanceof Error
           ? nextError.message
@@ -119,8 +123,16 @@ export function AcceptInviteCard({
           </p>
         ) : null}
 
+        {message ? (
+          <p className="inline-flex items-center gap-2 rounded-2xl border border-border/70 px-4 py-3 text-sm text-muted-foreground">
+            <LoaderCircle className="size-4 animate-spin" />
+            {message}
+          </p>
+        ) : null}
+
         <div className="flex flex-wrap gap-2">
           <Button onClick={handleAccept} disabled={!canAccept || isSubmitting}>
+            {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
             {isSubmitting ? "Joining..." : "Accept invite"}
           </Button>
           <Button variant="outline" asChild>

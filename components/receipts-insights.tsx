@@ -1,7 +1,8 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
+import { LoaderCircle } from "lucide-react"
+import { useMemo } from "react"
 
 import type { StoredReceipt } from "@/lib/receipt-schema"
 import { Badge } from "@/components/ui/badge"
@@ -14,7 +15,10 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { useReceiptsQuery } from "@/lib/queries/receipts"
 import { cn } from "@/lib/utils"
+
+const emptyReceipts: StoredReceipt[] = []
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat("en-PH", {
@@ -71,27 +75,11 @@ function duplicateIds(receipts: StoredReceipt[]) {
 }
 
 export function ReceiptsInsights() {
-  const [receipts, setReceipts] = useState<StoredReceipt[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState("")
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const response = await fetch("/api/receipts")
-        const payload = (await response.json()) as { receipts?: StoredReceipt[] }
-        setReceipts(payload.receipts ?? [])
-      } catch (loadError) {
-        setError(
-          loadError instanceof Error ? loadError.message : "Could not load summary."
-        )
-      } finally {
-        setIsLoading(false)
-      }
-    }
-
-    void load()
-  }, [])
+  const receiptsQuery = useReceiptsQuery()
+  const receipts = receiptsQuery.data ?? emptyReceipts
+  const isLoading = receiptsQuery.isLoading
+  const isRefreshing = receiptsQuery.isFetching && !isLoading
+  const error = receiptsQuery.error
 
   const totals = useMemo(() => {
     const totalSpend = receipts.reduce((sum, receipt) => sum + receipt.totalAmountDue, 0)
@@ -197,16 +185,41 @@ export function ReceiptsInsights() {
           </div>
         </section>
 
+        <section className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm text-muted-foreground">
+            {isRefreshing ? (
+              <span className="inline-flex items-center gap-2">
+                <LoaderCircle className="size-4 animate-spin" />
+                Refreshing insights...
+              </span>
+            ) : (
+              `${receipts.length} saved receipt${receipts.length === 1 ? "" : "s"} included`
+            )}
+          </div>
+        </section>
+
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <MetricCard label="Total spend" value={formatCurrency(totals.totalSpend)} />
-          <MetricCard label="VAT total" value={formatCurrency(totals.vatTotal)} />
-          <MetricCard label="Unreviewed" value={String(totals.unreviewed)} />
-          <MetricCard label="This month volume" value={String(totals.thisMonthCount)} />
-          <MetricCard
-            label="Duplicate risk"
-            value={String(duplicates.size)}
-            warning={duplicates.size > 0}
-          />
+          {isLoading ? (
+            <>
+              <MetricCardSkeleton />
+              <MetricCardSkeleton />
+              <MetricCardSkeleton />
+              <MetricCardSkeleton />
+              <MetricCardSkeleton />
+            </>
+          ) : (
+            <>
+              <MetricCard label="Total spend" value={formatCurrency(totals.totalSpend)} />
+              <MetricCard label="VAT total" value={formatCurrency(totals.vatTotal)} />
+              <MetricCard label="Unreviewed" value={String(totals.unreviewed)} />
+              <MetricCard label="This month volume" value={String(totals.thisMonthCount)} />
+              <MetricCard
+                label="Duplicate risk"
+                value={String(duplicates.size)}
+                warning={duplicates.size > 0}
+              />
+            </>
+          )}
         </section>
 
         <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
@@ -217,7 +230,7 @@ export function ReceiptsInsights() {
             </CardHeader>
             <CardContent className="grid gap-3">
               {isLoading ? (
-                <p className="text-sm text-muted-foreground">Loading...</p>
+                <InsightListSkeleton rows={5} />
               ) : monthly.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No data yet.</p>
               ) : (
@@ -247,40 +260,44 @@ export function ReceiptsInsights() {
               </CardDescription>
             </CardHeader>
             <CardContent className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Merchant</TableHead>
-                    <TableHead>Amount</TableHead>
-                    <TableHead>Reason</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {needsFix.length > 0 ? (
-                    needsFix.map((receipt) => (
-                      <TableRow key={receipt.id}>
-                        <TableCell>{receipt.merchantName || "Unknown merchant"}</TableCell>
-                        <TableCell>{formatCurrency(receipt.totalAmountDue)}</TableCell>
-                        <TableCell>
-                          {!receipt.merchantName || !receipt.tinNumber || !receipt.purchaseDate ? (
-                            <Badge variant="warning">Missing details</Badge>
-                          ) : (
-                            <Badge variant="outline">
-                              Clarity score {Math.round(receipt.confidence)}%
-                            </Badge>
-                          )}
+              {isLoading ? (
+                <InsightTableSkeleton />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Merchant</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Reason</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {needsFix.length > 0 ? (
+                      needsFix.map((receipt) => (
+                        <TableRow key={receipt.id}>
+                          <TableCell>{receipt.merchantName || "Unknown merchant"}</TableCell>
+                          <TableCell>{formatCurrency(receipt.totalAmountDue)}</TableCell>
+                          <TableCell>
+                            {!receipt.merchantName || !receipt.tinNumber || !receipt.purchaseDate ? (
+                              <Badge variant="warning">Missing details</Badge>
+                            ) : (
+                              <Badge variant="outline">
+                                Clarity score {Math.round(receipt.confidence)}%
+                              </Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={3} className="py-8 text-center text-muted-foreground">
+                          Nothing to fix right now.
                         </TableCell>
                       </TableRow>
-                    ))
-                  ) : (
-                    <TableRow>
-                      <TableCell colSpan={3} className="py-8 text-center text-muted-foreground">
-                        Nothing to fix right now.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+                    )}
+                  </TableBody>
+                </Table>
+              )}
             </CardContent>
           </Card>
         </section>
@@ -291,7 +308,9 @@ export function ReceiptsInsights() {
               <CardTitle>Spend by category</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-2">
-              {byCategory.length > 0 ? (
+              {isLoading ? (
+                <InsightListSkeleton rows={6} />
+              ) : byCategory.length > 0 ? (
                 byCategory.map((entry) => (
                   <div
                     key={entry.label}
@@ -304,10 +323,12 @@ export function ReceiptsInsights() {
               ) : (
                 <p className="text-sm text-muted-foreground">No category data yet.</p>
               )}
-              <div className="rounded-md border border-dashed bg-background px-3 py-2 text-sm">
-                <span className="text-muted-foreground">Uncategorized total: </span>
-                <span className="font-medium">{formatCurrency(uncategorizedTotal)}</span>
-              </div>
+              {!isLoading ? (
+                <div className="rounded-md border border-dashed bg-background px-3 py-2 text-sm">
+                  <span className="text-muted-foreground">Uncategorized total: </span>
+                  <span className="font-medium">{formatCurrency(uncategorizedTotal)}</span>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 
@@ -316,7 +337,9 @@ export function ReceiptsInsights() {
               <CardTitle>Spend by merchant</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-2">
-              {byMerchant.length > 0 ? (
+              {isLoading ? (
+                <InsightListSkeleton rows={6} />
+              ) : byMerchant.length > 0 ? (
                 byMerchant.map((entry) => (
                   <div
                     key={entry.label}
@@ -333,9 +356,9 @@ export function ReceiptsInsights() {
           </Card>
         </section>
 
-        {error ? (
+        {error instanceof Error ? (
           <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {error}
+            {error.message}
           </div>
         ) : null}
       </div>
@@ -356,6 +379,45 @@ function MetricCard({
     <div className={cn("rounded-2xl border bg-card px-4 py-3", warning && "border-amber-300/70")}>
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="mt-1 text-xl font-semibold">{value}</p>
+    </div>
+  )
+}
+
+function MetricCardSkeleton() {
+  return (
+    <div className="rounded-2xl border bg-card px-4 py-3">
+      <div className="h-3 w-20 animate-pulse rounded bg-muted" />
+      <div className="mt-3 h-7 w-24 animate-pulse rounded bg-muted" />
+    </div>
+  )
+}
+
+function InsightListSkeleton({ rows }: { rows: number }) {
+  return (
+    <>
+      {Array.from({ length: rows }).map((_, index) => (
+        <div key={index} className="grid gap-2 rounded-md border bg-background px-3 py-3">
+          <div className="h-4 w-28 animate-pulse rounded bg-muted" />
+          <div className="h-3 w-full animate-pulse rounded bg-muted" />
+        </div>
+      ))}
+    </>
+  )
+}
+
+function InsightTableSkeleton() {
+  return (
+    <div className="grid gap-3">
+      {Array.from({ length: 5 }).map((_, index) => (
+        <div
+          key={index}
+          className="grid grid-cols-[minmax(0,1.1fr)_0.7fr_0.9fr] items-center gap-3 rounded-xl border px-4 py-4"
+        >
+          <div className="h-4 w-28 animate-pulse rounded bg-muted" />
+          <div className="h-4 w-20 animate-pulse rounded bg-muted" />
+          <div className="h-6 w-28 animate-pulse rounded-full bg-muted" />
+        </div>
+      ))}
     </div>
   )
 }
