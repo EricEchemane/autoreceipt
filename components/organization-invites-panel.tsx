@@ -1,8 +1,8 @@
 "use client"
 
-import { useMemo, useState } from "react"
 import Link from "next/link"
-import { Copy, MailPlus, UserRoundPlus, X } from "lucide-react"
+import { CheckCircle2, Copy, LoaderCircle, MailPlus, UserRoundPlus, X } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -92,6 +92,20 @@ export function OrganizationInvitesPanel({
   const [busyInviteId, setBusyInviteId] = useState<number | null>(null)
   const [message, setMessage] = useState("")
   const [error, setError] = useState("")
+
+  useEffect(() => {
+    if (!message) {
+      return
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setMessage("")
+    }, 2800)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [message])
 
   const pendingInvites = useMemo(
     () => invites.filter((invite) => invite.status === "pending"),
@@ -258,6 +272,7 @@ export function OrganizationInvitesPanel({
               </Select>
               <Button type="submit" disabled={isSubmitting}>
                 <MailPlus data-icon="inline-start" />
+                {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
                 {isSubmitting ? "Sending..." : "Send invite"}
               </Button>
             </form>
@@ -270,7 +285,8 @@ export function OrganizationInvitesPanel({
 
         {(message || error) ? (
           <div className="rounded-2xl border px-4 py-3 text-sm">
-            <span className={error ? "text-destructive" : "text-foreground"}>
+            <span className={error ? "inline-flex items-center gap-2 text-destructive" : "inline-flex items-center gap-2 text-foreground"}>
+              {error ? null : <CheckCircle2 className="size-4 text-emerald-500" />}
               {error || message}
             </span>
           </div>
@@ -330,6 +346,7 @@ export function OrganizationInvitesPanel({
                         disabled={busyInviteId === invite.id}
                       >
                         <X data-icon="inline-start" />
+                        {busyInviteId === invite.id ? <LoaderCircle className="size-4 animate-spin" /> : null}
                         {busyInviteId === invite.id ? "Cancelling..." : "Cancel"}
                       </Button>
                     ) : null}
