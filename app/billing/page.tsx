@@ -43,6 +43,10 @@ function getBillingStatusHelp(status: string | null | undefined) {
     return "Your payment is being processed. This usually updates automatically."
   }
 
+  if (status === "inactive" || status === "cancelled" || status === "canceled") {
+    return "Your paid plan is no longer active. Start it again any time to restore higher limits and paid features."
+  }
+
   return null
 }
 
@@ -58,6 +62,94 @@ function normalizeCurrentPlan(plan: string | null | undefined) {
   }
 
   return "free" as const
+}
+
+function resolveCheckoutActions(params: {
+  currentPlan: "free" | "pro" | "business"
+  requestedPlan: "pro" | "business"
+  hasActiveBilling: boolean
+  hasPendingBilling: boolean
+}) {
+  const { currentPlan, requestedPlan, hasActiveBilling, hasPendingBilling } = params
+
+  if (hasPendingBilling) {
+    return {
+      primaryCheckoutAction: undefined,
+      secondaryCheckoutAction: undefined,
+    }
+  }
+
+  if (hasActiveBilling) {
+    if (currentPlan === "pro") {
+      return {
+        primaryCheckoutAction: {
+          plan: "business" as const,
+          label: "Upgrade to Business",
+          enabled: true,
+        },
+        secondaryCheckoutAction: undefined,
+      }
+    }
+
+    return {
+      primaryCheckoutAction: undefined,
+      secondaryCheckoutAction: undefined,
+    }
+  }
+
+  if (currentPlan === "business") {
+    return {
+      primaryCheckoutAction: {
+        plan: "business" as const,
+        label: "Renew Business plan",
+        enabled: true,
+      },
+      secondaryCheckoutAction: undefined,
+    }
+  }
+
+  if (currentPlan === "pro") {
+    return {
+      primaryCheckoutAction: {
+        plan: "pro" as const,
+        label: "Renew Pro plan",
+        enabled: true,
+      },
+      secondaryCheckoutAction: {
+        plan: "business" as const,
+        label: "Start Business plan",
+        enabled: true,
+      },
+    }
+  }
+
+  if (requestedPlan === "business") {
+    return {
+      primaryCheckoutAction: {
+        plan: "business" as const,
+        label: "Start Business plan",
+        enabled: true,
+      },
+      secondaryCheckoutAction: {
+        plan: "pro" as const,
+        label: "Start Pro plan",
+        enabled: true,
+      },
+    }
+  }
+
+  return {
+    primaryCheckoutAction: {
+      plan: "pro" as const,
+      label: "Start Pro plan",
+      enabled: true,
+    },
+    secondaryCheckoutAction: {
+      plan: "business" as const,
+      label: "Start Business plan",
+      enabled: true,
+    },
+  }
 }
 
 export default async function BillingPage({
@@ -95,50 +187,22 @@ export default async function BillingPage({
     requestedPlanParam?.toLowerCase() === "business" ? "business" : "pro"
   const statusLabel = formatBillingStatus(billing?.status)
   const statusHelp = getBillingStatusHelp(billing?.status)
+  const { primaryCheckoutAction, secondaryCheckoutAction } = resolveCheckoutActions({
+    currentPlan,
+    requestedPlan,
+    hasActiveBilling,
+    hasPendingBilling,
+  })
   const [members, invites] = businessPlanEnabled
     ? await Promise.all([
-        listOrganizationMembers(organization.id),
-        listOrganizationInvites(organization.id),
-      ])
+      listOrganizationMembers(organization.id),
+      listOrganizationInvites(organization.id),
+    ])
     : [[], []]
   const inviteBaseUrl =
     process.env.NEXT_PUBLIC_APP_URL ??
     process.env.BETTER_AUTH_URL ??
     "http://localhost:3000"
-  const primaryCheckoutAction =
-    currentPlan === "pro" && !hasPendingBilling
-      ? {
-          plan: "business" as const,
-          label: "Upgrade to Business",
-          enabled: true,
-        }
-      : currentPlan === "business"
-        ? undefined
-        : requestedPlan === "business"
-          ? {
-              plan: "business" as const,
-              label: "Start Business plan",
-              enabled: !hasActiveBilling && !hasPendingBilling,
-            }
-          : {
-              plan: "pro" as const,
-              label: "Start Pro plan",
-              enabled: !hasActiveBilling && !hasPendingBilling,
-            }
-  const secondaryCheckoutAction =
-    currentPlan === "free"
-      ? requestedPlan === "business"
-        ? {
-            plan: "pro" as const,
-            label: "Start Pro plan",
-            enabled: !hasActiveBilling && !hasPendingBilling,
-          }
-        : {
-            plan: "business" as const,
-            label: "Start Business plan",
-            enabled: !hasActiveBilling && !hasPendingBilling,
-          }
-      : undefined
 
   return (
     <main className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-6 sm:px-6 lg:px-8">
@@ -190,14 +254,14 @@ export default async function BillingPage({
               Manage your plan and unlock higher receipt volume.
             </CardDescription>
           </div>
-          <Badge variant={hasActiveBilling ? "success" : "outline"}>
-            {hasActiveBilling ? "Active plan" : "Free plan"}
+          <Badge variant={hasActiveBilling ? "success" : "outline"} className='uppercase'>
+            {billing?.plan ?? "Free plan"}
           </Badge>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="grid gap-2 text-sm text-muted-foreground">
             <p>
-              Current plan: <span className="font-medium text-foreground">{billing?.plan ?? "free"}</span>
+              Current plan: <span className="font-medium text-foreground uppercase">{billing?.plan ?? "free"}</span>
             </p>
             <p>
               Status: <span className="font-medium text-foreground">{statusLabel}</span>
